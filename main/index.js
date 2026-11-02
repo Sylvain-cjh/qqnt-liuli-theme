@@ -3,7 +3,7 @@
 // 功能性的东西（防撤回、复读、引用不带 @、记住位置）都在 qq-enhance 插件里。
 const fs = require("node:fs");
 const path = require("node:path");
-const { ipcMain, shell } = require("electron");
+const { ipcMain, shell, BrowserWindow } = require("electron");
 
 const SLUG = "liuli-dsh-theme";
 const LOG = path.join(LiteLoader.path.data, SLUG, "plugin.log");
@@ -41,6 +41,13 @@ try {
 /* LiteLoader 在内核报 onSessionInitComplete 时触发 onLogin(uid)。 */
 let selfUid = "";
 ipcMain.handle("LiteLoader.liuli.selfUid", () => selfUid);
+ipcMain.handle("LiteLoader.liuli.openDevTools", event => {
+    const contents = event.sender;
+    if (contents.isDestroyed() || event.senderFrame !== contents.mainFrame ||
+        !BrowserWindow.fromWebContents(contents)) return false;
+    contents.openDevTools({ mode: "detach", activate: true });
+    return true;
+});
 
 /* 小程序卡片用默认浏览器打开：只放行 http/https */
 ipcMain.handle("LiteLoader.liuli.openExternal", async (_e, url) => {
@@ -58,6 +65,11 @@ ipcMain.handle("LiteLoader.liuli.openExternal", async (_e, url) => {
 });
 
 module.exports = {
+    dispose() {
+        for (const channel of ['LiteLoader.liuli.selfUid', 'LiteLoader.liuli.openDevTools', 'LiteLoader.liuli.openExternal', 'LiteLoader.liuli.diagExport', 'LiteLoader.liuli.diagOpenPath']) ipcMain.removeHandler(channel);
+        ipcMain.removeAllListeners('LiteLoader.liuli.diagLog');
+        selfUid = '';
+    },
     onLogin(uid) {
         selfUid = String(uid || "");
         log("login uid=" + selfUid);

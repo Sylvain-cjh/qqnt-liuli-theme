@@ -3,6 +3,15 @@
 const { contextBridge, ipcRenderer } = require("electron");
 
 const api = {
+    openDevTools: async () => {
+        try { return await ipcRenderer.invoke("LiteLoader.liuli.openDevTools"); }
+        catch (error) {
+            if (String(error?.message).includes('No handler registered')) {
+                throw new Error("开发者工具主进程接口尚未载入，请点击“重新加载琉璃”更新接口，单独刷新页面不会生效。");
+            }
+            throw error;
+        }
+    },
     selfUid: () => ipcRenderer.invoke("LiteLoader.liuli.selfUid"),
     openExternal: url => ipcRenderer.invoke("LiteLoader.liuli.openExternal", url),
     // 诊断包（契约 installer/DIAG-COVERAGE.md 3.1）

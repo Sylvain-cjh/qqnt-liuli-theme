@@ -7,6 +7,7 @@
 const SLUG = "liuli-dsh-theme";
 import { installLayout, applyBar, nativeBarItem, applyAll as llLayoutPass, buildLayoutSection } from "./layout-custom.js";
 import { installArkExternal } from "./ark-external.js";
+import { installContactParallax } from "./contact-parallax.js";
 import { ROLE_KEY, loadRoles, roleVars, accentPalette, buildRoleControls } from "./color-roles.js";
 // 诊断运行时（契约 installer/DIAG-COVERAGE.md 第三、3.2、3.3、3.5 节）：
 // 尽早安装，后面整个模块体里任何 console.error / 未捕获异常 / Promise 拒绝
@@ -18,8 +19,14 @@ import {
 } from "./diag.js";
 beginBoot();
 installDiagRuntime();
+document.addEventListener('keydown', event => {
+    if (event.ctrlKey && event.shiftKey && !event.altKey && event.code === 'KeyI' && !event.repeat && window.liuli_api?.openDevTools) {
+        event.preventDefault(); event.stopPropagation();
+        window.liuli_api.openDevTools().catch(error => toast(error.message || String(error)));
+    }
+}, true);
 const ASSET_BASE = "local://profile/plugins/" + SLUG + "/assets/";
-const FILES = ["wallpaper.css", "qq-tokens.css", "palette.css", "liuli.css", "typography.css", "panel.css", "settings-page.css", "details.css", "no-dividers.css", "input-bar.css", "bubbles.css", "layout.css", "lists.css", "motion.css", "markdown.css", "layout-custom.css"];
+const FILES = ["wallpaper.css", "qq-tokens.css", "palette.css", "liuli.css", "typography.css", "panel.css", "settings-page.css", "details.css", "no-dividers.css", "input-bar.css", "bubbles.css", "layout.css", "lists.css", "motion.css", "markdown.css", "layout-custom.css", "compact-chat.css"];
 const STYLE_ID = "liuli-dsh-theme";
 const WALLPAPER = ASSET_BASE + "wallpaper.jpg";
 // 默认壁纸不随插件发布：assets/wallpaper.css（内联壁纸）和 assets/wallpaper.jpg（取色用）
@@ -308,28 +315,45 @@ const QQ_COLOR_MAP = {
  * 原来每 1.5 秒对全页每个叶子节点 getComputedStyle，主线程被拖死。
  * 现在：每个节点只检查一次（WeakSet），每轮最多花 8ms，剩下的下一轮接着做。 */
 const llColorSeen = new WeakSet();
-function normalizeColors() {
-    try {
-        const t0 = performance.now();
-        const nodes = document.querySelectorAll("body *");
-        for (let i = 0; i < nodes.length; i++) {
-            const el = nodes[i];
-            if (llColorSeen.has(el)) continue;
-            llColorSeen.add(el);
-            if (el.dataset.liuliColor) continue;
-            if (el.children.length > 0) continue;
-            const text = (el.textContent || "").trim();
-            if (!text) continue;
-            const color = getComputedStyle(el).color.replace(/\s+/g, " ").trim();
-            const mapped = QQ_COLOR_MAP[color];
-            if (mapped) {
-                el.dataset.liuliColor = "1";
-                el.style.setProperty("color", mapped, "important");
-            }
-            if ((i & 63) === 0 && performance.now() - t0 > 8) return;
-        }
-    } catch (e) { /* 静默 */ }
+function normalizeColors(root) {
+    root = root || document.body;
+    llQueueColorRoot(root);
 }
+
+const llColorRoots = new WeakSet();
+const llColorJobs = [];
+let llColorScheduled = false;
+function llQueueColorRoot(root) {
+    if (!root || root.nodeType !== 1 || llColorRoots.has(root)) return;
+    llColorRoots.add(root);
+    llColorJobs.push({ node: root, walker: document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT) });
+    llScheduleColorWork();
+}
+function llScheduleColorWork() {
+    if (llColorScheduled || !llColorJobs.length || document.hidden) return;
+    llColorScheduled = true;
+    const execute = () => {
+        llColorScheduled = false;
+        if (document.hidden) return;
+        const start = performance.now();
+        let processed = 0;
+        while (llColorJobs.length && processed < 180 && performance.now() - start < 4) {
+            const job = llColorJobs[0], el = job.node;
+            if (!el) { llColorJobs.shift(); continue; }
+            job.node = job.walker.nextNode(); processed++;
+            if (!el.isConnected || llColorSeen.has(el)) continue;
+            llColorSeen.add(el);
+            if (el.children.length || !el.textContent.trim() || el.closest('.chat-msg-area')) continue;
+            const color = getComputedStyle(el).color.replace(/\s+/g, ' ').trim();
+            const mapped = QQ_COLOR_MAP[color];
+            if (mapped) { el.dataset.liuliColor = '1'; el.style.setProperty('color', mapped, 'important'); }
+        }
+        llScheduleColorWork();
+    };
+    if (window.requestIdleCallback) requestIdleCallback(execute, { timeout: 500 });
+    else setTimeout(execute, 80);
+}
+
 
 const DIM_COLORS = new Set([
     "rgb(128, 128, 128)", "rgb(102, 102, 102)", "rgb(153, 153, 153)"
@@ -903,9 +927,9 @@ function llSyncPins(overlay) {
  * 这里在每次 tick 把它挪进 .msg-content-container，
  * 挪完打个标记，避免反复搬动。
  */
-function moveSenderIntoBubble() {
+function moveSenderIntoBubble(root = document) {
     try {
-        var containers = document.querySelectorAll(".message-container");
+        var containers = root.querySelectorAll(".message-container");
         for (var i = 0; i < containers.length; i++) {
             var mc = containers[i];
             var bubble = mc.querySelector(".msg-content-container");
@@ -1227,6 +1251,7 @@ function installSideListObserver() {
         for (var i = 0; i < recs.length && !hit; i++) {
             var t = recs[i].target;
             if (t && t.nodeType !== 1) t = t.parentElement;
+            if (t?.closest?.(".liuli-contact-projection")) continue;
             if (t && t.closest && t.closest(".group-member, .recent-contact, .two-col-layout__aside")) hit = true;
         }
         if (!hit || llSideRaf) return;
@@ -1253,6 +1278,7 @@ function liuliMessagePass() {
  * 用 .ml-item 的消息 id（递增的 64 位整数）判断：只有比当前会话已见过的
  * 最大 id 还新的，才是"刚收到/刚发出"的消息。换会话时只记基线、不播。 */
 var llMsgSeen = { chat: null, max: null };
+const llMotionPending = new Map();
 function llChatKey() {
     var t = document.querySelector(".aio .chat-header .panel-header__title");
     return t ? (t.textContent || "").replace(/\s+/g, " ").trim() : "";
@@ -1268,6 +1294,7 @@ function llMotionPass(added) {
         if (key !== llMsgSeen.chat) {
             var first = llMsgSeen.chat !== null;
             llMsgSeen.chat = key;
+            llMotionPending.clear();
             var m = null;
             items.forEach(function (it) { var v = llMsgId(it); if (v !== null && (m === null || v > m)) m = v; });
             llMsgSeen.max = m;
@@ -1280,13 +1307,24 @@ function llMotionPass(added) {
             return;
         }
         if (LL_REDUCED || !added || !added.length) return;
+        for (const [item, pending] of llMotionPending) {
+            if (!item.isConnected || llMsgId(item) !== pending.id || performance.now() - pending.at > 2000) llMotionPending.delete(item);
+        }
+        added = [...added, ...llMotionPending.keys()];
+        var baseline = llMsgSeen.max;
+        added = [...new Set(added)].sort((a,b) => { const av=llMsgId(a), bv=llMsgId(b); return av === bv ? 0 : av < bv ? -1 : 1; });
         added.forEach(function (it) {
             var v = llMsgId(it);
             if (v === null || llMsgSeen.max === null || v <= llMsgSeen.max) return;
             llMsgSeen.max = v;
             var mc = it.querySelector(".message-container");
             var w = it.querySelector(".message-content__wrapper");
-            if (!mc || !w || !w.animate) return;
+            if (!mc || !w || !w.animate) {
+                if (!llMotionPending.has(it)) llMotionPending.set(it, { id: v, at: performance.now() });
+                return;
+            }
+            llMotionPending.delete(it);
+            if (v > llMsgSeen.max) llMsgSeen.max = v;
             var self = mc.classList.contains("message-container--self") || !!mc.querySelector(".container--self");
             w.style.transformOrigin = self ? "100% 100%" : "0% 100%";
             w.animate([
@@ -1295,7 +1333,7 @@ function llMotionPass(added) {
                 { opacity: 1, transform: "none" }
             ], { duration: 360, easing: "cubic-bezier(0.22, 1, 0.36, 1)" });
             var av = mc.querySelector(":scope > .avatar-span");
-            if (av && av.animate && getComputedStyle(av).display !== "none") {
+            if (av && av.animate) {
                 av.animate([{ opacity: 0, transform: "scale(0.6)" }, { opacity: 1, transform: "none" }],
                     { duration: 300, delay: 60, easing: "cubic-bezier(0.3, 1.35, 0.45, 1)", fill: "backwards" });
             }
@@ -1305,40 +1343,62 @@ function llMotionPass(added) {
 
 function installMessageObserver() {
     if (window.__liuliMsgObs) return;
-    var busy = false;
-    function touchesMessages(rec) {
-        var t = rec.target;
-        if (t && t.nodeType !== 1) t = t.parentElement;
-        if (t && t.closest && t.closest(".chat-msg-area")) return true;
-        for (var i = 0; i < rec.addedNodes.length; i++) {
-            var n = rec.addedNodes[i];
-            if (n.nodeType !== 1) continue;
-            if (n.matches(".message-container, .chat-msg-area") || n.querySelector(".message-container")) return true;
+    let frame = 0, full = true;
+    const dirty = new Set();
+    function observe() { obs.observe(document.body, { childList: true, characterData: true, subtree: true }); }
+    function flush() {
+        frame = 0;
+        if (document.hidden || window.__liuliPause) return;
+        const area = document.querySelector('.chat-msg-area');
+        if (!area) { dirty.clear(); return; }
+        const scrolling = performance.now() - (window.__llScrollT || 0) < 120;
+        const items = [...dirty].filter(x => x.isConnected && area.contains(x));
+        for (const item of [...dirty]) if (!item.isConnected || !area.contains(item)) dirty.delete(item);
+        obs.disconnect();
+        try {
+            if (full) { liuliMessagePass(); llMarkdownPass(area); llAtPass(area); dirty.clear(); }
+            else {
+                const started = performance.now();
+                let processed = 0;
+                for (const item of items) {
+                    moveSenderIntoBubble(item); markQuoteRoots(item); llMarkdownPass(item); llAtPass(item);
+                    dirty.delete(item); processed++;
+                    if (scrolling && processed >= 6 && performance.now() - started > 3) break;
+                }
+                groupMessages(); scheduleStick();
+            }
+            llMotionPass(items);
+            full = false;
+        } finally {
+            observe();
+            if (dirty.size && !frame) frame = requestAnimationFrame(flush);
         }
-        return false;
     }
-    var obs = new MutationObserver(function (recs) {
-        if (busy || window.__liuliPause) return;
-        var hit = false;
-        for (var i = 0; i < recs.length; i++) { if (touchesMessages(recs[i])) { hit = true; break; } }
-        if (!hit) return;
-        busy = true;
-        var added = [];
-        for (var k = 0; k < recs.length; k++) {
-            var an = recs[k].addedNodes;
-            for (var q = 0; q < an.length; q++) {
-                var nd = an[q];
-                if (nd.nodeType !== 1) continue;
-                if (nd.classList && nd.classList.contains("ml-item")) added.push(nd);
-                else if (nd.querySelectorAll) nd.querySelectorAll(".ml-item[id]").forEach(function (x) { added.push(x); });
+    const obs = new MutationObserver(records => {
+        let hit = false;
+        for (const rec of records) {
+            const target = rec.target.nodeType === 1 ? rec.target : rec.target.parentElement;
+            if (target?.closest('.liuli-contact-projection, #liuli-embedded, .liuli-panel')) continue;
+            const area = target?.closest('.chat-msg-area');
+            if (area) {
+                const item = target.closest('.ml-item[id]');
+                if (item && !target.closest('.send-time')) { dirty.add(item); hit = true; }
+                if (rec.removedNodes.length) hit = true;
+            }
+            for (const node of rec.addedNodes) {
+                if (node.nodeType !== 1) continue;
+                if (node.matches('.chat-msg-area') || (!area && node.querySelector('.chat-msg-area'))) { full = true; hit = true; }
+                if (!area && !node.closest('.chat-msg-area') && !full) continue;
+                if (node.matches('.ml-item[id]')) { dirty.add(node); hit = true; }
+                if (area || full) node.querySelectorAll('.ml-item[id]').forEach(x => { dirty.add(x); hit = true; });
             }
         }
-        try { liuliMessagePass(); } catch (e) { /* 静默 */ }
-        try { llMotionPass(added); } catch (e) { /* 静默 */ }
-        finally { obs.takeRecords(); busy = false; }
+        if (hit && !frame && !document.hidden) frame = requestAnimationFrame(flush);
     });
-    obs.observe(document.body, { childList: true, subtree: true });
-    window.__liuliMsgObs = obs;
+    observe(); window.__liuliMsgObs = obs;
+    frame = requestAnimationFrame(flush);
+    document.addEventListener('visibilitychange', () => { if (!document.hidden && !frame) { full = true; frame = requestAnimationFrame(flush); } });
+    window.addEventListener('pagehide', () => { cancelAnimationFrame(frame); obs.disconnect(); dirty.clear(); }, { once: true });
 }
 
 /* 指向唤出的状态机：不用 :has(:hover)（这版 Chromium 里 :has + :hover 失效很慢，
@@ -1357,7 +1417,7 @@ function installRevealTracker() {
      *   左边缘 ≤8px（整条）           → 展开导航；展开后指针在导航卡上就保持
      *   顶边 ≤8px 的左 / 右 200px     → 唤出左上 / 右上胶囊；指针在胶囊上就保持
      * 离开后收起：导航 250ms；胶囊 600ms（#4 #10：给鼠标从感应条挪到按钮上留余量）。 */
-    var EDGE = 8, PAD = 18, CORNER = 200;
+    var EDGE = 8, TOP = 24, PAD = 18, CORNER = 200;
     var HOLD = { nav: 250, l: 600, r: 600 };
     var KEYS = { l: "liuliRL", r: "liuliRR", nav: "liuliRNav" };
     var state = {}, timers = {}, last = { x: -1, y: -1 };
@@ -1396,19 +1456,25 @@ function installRevealTracker() {
         set("nav", x <= EDGE || (state.nav && over(".container-sidebar", x, y)));
         if (nativeBar()) { set("l", false); set("r", false); return; }
         set("l", (y <= EDGE && x >= 56 && x <= CORNER + 56) || (state.l && over(".topbar-profile", x, y)));
-        set("r", (y <= EDGE && x >= w - CORNER) || (state.r && over(".window-control-area", x, y)));
+        set("r", (y <= TOP && x >= w - 176) || (state.r && over(".window-control-area", x, y)));
     }
     /* 鼠标进到拖动区 / 离开窗口时页面只收到一次 mouseleave，之后不再有 mousemove。
      * 如果离开前指针就在胶囊附近，多半只是经过了一小段拖动区，晚一点再收。 */
     function onLeave() {
+        cancelMove();
         set("nav", false);
         ["l", "r"].forEach(function (k) {
             var sel = k === "l" ? ".topbar-profile" : ".window-control-area";
             set(k, false, state[k] && over(sel, last.x, last.y) ? 1500 : HOLD[k]);
         });
     }
-    function onBlur() { set("nav", false); set("l", false); set("r", false); }
-    document.addEventListener("mousemove", onMove, true);
+    function onBlur() { cancelMove(); set("nav", false); set("l", false); set("r", false); }
+    let moveFrame = 0, lastMove;
+    function cancelMove() { if (moveFrame) cancelAnimationFrame(moveFrame); moveFrame = 0; }
+    document.addEventListener('mousemove', event => {
+        lastMove = { clientX: event.clientX, clientY: event.clientY };
+        if (!moveFrame) moveFrame = requestAnimationFrame(() => { moveFrame = 0; onMove(lastMove); });
+    }, { capture: true, passive: true });
     document.documentElement.addEventListener("mouseleave", onLeave);
     window.addEventListener("blur", onBlur);
 }
@@ -1449,10 +1515,10 @@ function ensureHoverEntries() {
  * 这里给最外层打 data-liuli-quote-root="1"，内层打 "0"，
  * CSS 只对 1 画线，0 全部清空。
  */
-function markQuoteRoots() {
+function markQuoteRoots(root = document) {
     try {
         // 全部先归零（只看消息区、只看还没标过的：以前每次 DOM 变动都扫全页的 [class*=…]，滚动时很重）
-        var all = document.querySelectorAll('.chat-msg-area :is([class*="reply"], [class*="quote"]):not([data-liuli-quote-root])');
+        var all = root.querySelectorAll('.chat-msg-area :is([class*="reply"], [class*="quote"]):not([data-liuli-quote-root])');
         for (var i = 0; i < all.length; i++) {
             if (all[i].dataset.liuliQuoteRoot !== "0") all[i].dataset.liuliQuoteRoot = "0";
         }
@@ -1460,9 +1526,9 @@ function markQuoteRoots() {
         // ⚠️ 不要用"父级链里有没有 reply"判断：
         //   气泡根本身就叫 reply-message__container，
         //   那样会把每一层都判成嵌套，结果一条线都不画。
-        var roots = document.querySelectorAll(".reply-element");
+        var roots = root.querySelectorAll(".reply-element");
         // 虚拟列表会复用节点：以前是根、现在不是的，改回 0
-        var stale = document.querySelectorAll('[data-liuli-quote-root="1"]:not(.reply-element)');
+        var stale = root.querySelectorAll('[data-liuli-quote-root="1"]:not(.reply-element)');
         for (var s = 0; s < stale.length; s++) stale[s].dataset.liuliQuoteRoot = "0";
         for (var j = 0; j < roots.length; j++) {
             if (roots[j].dataset.liuliQuoteRoot !== "1") roots[j].dataset.liuliQuoteRoot = "1";
@@ -2514,6 +2580,30 @@ function buildDiagSection(host) {
     openBtn.disabled = true;
     actions.appendChild(exportBtn);
     actions.appendChild(openBtn);
+    const devToolsBtn = llBtn("打开开发者工具", "ghost");
+    const reloadDevToolsBtn = llBtn("重新加载琉璃", "ghost");
+    reloadDevToolsBtn.title = "重新载入主进程接口并刷新 QQ 页面";
+    reloadDevToolsBtn.addEventListener("click", async () => {
+        reloadDevToolsBtn.disabled = true;
+        try {
+            if (!LiteLoader.api.plugin.reload) throw new Error("当前 LiteLoader 未提供热重载接口。");
+            const result = await LiteLoader.api.plugin.reload(SLUG);
+            toast(result.message || "已请求重新加载琉璃。");
+        } catch (error) { toast(error.message || String(error)); }
+        finally { reloadDevToolsBtn.disabled = false; }
+    });
+    devToolsBtn.title = "打开当前窗口；快捷键 Ctrl+Shift+I";
+    devToolsBtn.addEventListener("click", async () => {
+        try {
+            if (!window.liuli_api?.openDevTools) throw new Error("请在 LiteLoader 中重新加载琉璃，更新开发者工具接口。");
+            if (!await window.liuli_api.openDevTools()) throw new Error("当前窗口无法打开开发者工具。");
+        } catch (error) {
+            const message = error.message || String(error);
+            toast(message.includes('No handler registered') ? "主进程接口未更新，请点击“重新加载琉璃”；只刷新页面不会生效。" : message);
+        }
+    });
+    actions.appendChild(devToolsBtn);
+    actions.appendChild(reloadDevToolsBtn);
     block.appendChild(actions);
 
     const status = document.createElement("div");
@@ -2716,7 +2806,10 @@ function buildPanelContent(host, settings) {
         infoText.textContent = "壁纸取色 " + src + " → 品牌 " + brand;
     };
     refreshInfo();
-    setInterval(refreshInfo, 3000);
+    const infoTimer = setInterval(() => {
+        if (!host.isConnected) { clearInterval(infoTimer); return; }
+        if (!document.hidden) refreshInfo();
+    }, 10000);
 
     const group = document.createElement("div");
     group.className = "liuli-panel__group";
@@ -2850,7 +2943,7 @@ async function initPanel() {
         applyOverrides();
         fixContrast();
         normalizeColors();
-        setInterval(() => { if (window.__liuliPause) return; if (performance.now() - (window.__llScrollT || 0) < 600) return; /* 正在滚动：这一轮跳过，免得滚动中卡一下 */ if (document.querySelector(".q-dialog-modal")) { mountInputBar(); return; } applyOverrides(); fixContrast(); normalizeColors(); keepWindowControlsVisible(); mountInputBar(); groupMessages(); stickAvatars(); markQuoteRoots(); moveSenderIntoBubble(); ensureHoverEntries(); llWatchContactList(); llGroupMembersPass(); llMarkdownPass(); llLayoutPass(); }, 1500);
+        installMaintenanceScheduler();
         try { installLayout(function () { llSyncPins(); }); } catch (e) { console.warn("[liuli-dsh-theme] layout failed:", e && e.message); }
         try { installArkExternal(window.liuli_api); } catch (e) { console.warn("[liuli-dsh-theme] ark external failed:", e && e.message); }
         installMarkdownObserver();
@@ -2858,6 +2951,7 @@ async function initPanel() {
         ensureHoverEntries();
         installMessageObserver();
         installSideListObserver();
+        installContactParallax();
         llWatchContactList();
         liuliMessagePass();
         try { await initPanel(); } catch (e) { console.warn("[liuli-dsh-theme] panel failed:", e && e.message); }
@@ -2927,12 +3021,12 @@ function llInlineMarkdown(md) {
         .replace(/\n/g, "<br>");
 }
 
-function llMarkdownPass() {
+function llMarkdownPass(root = document) {
     // 性能：滚动时这里会被频繁调用。只读 textContent（不触发排版），
     // 判过的元素在节点上记一个属性，文本没变就直接跳过。
     try {
         const on = llMdEnabled();
-        const els = document.querySelectorAll(".ml-item .text-normal");
+        const els = root.querySelectorAll(".ml-item .text-normal");
         for (let i = 0; i < els.length; i++) {
             const el = els[i];
             if (!on) {
@@ -2974,7 +3068,8 @@ function llCurrentPeer() {
 function llAnimateEnter(items) {
     if (!items.length || matchMedia("(prefers-reduced-motion: reduce)").matches) return;
     // 越靠下（越新）越先出来
-    items.sort((a, b) => b.getBoundingClientRect().top - a.getBoundingClientRect().top);
+    const positions = new Map(items.map(el => [el, el.getBoundingClientRect().top]));
+    items.sort((a, b) => positions.get(b) - positions.get(a));
     items.slice(0, LL_ENTER_MAX).forEach((el, i) => {
         el.style.setProperty("--ll-enter-i", String(i));
         el.classList.remove("ll-enter");
@@ -3004,16 +3099,10 @@ function llHandleAdded(records) {
 
 function installMarkdownObserver() {
     if (window.__llMdObserver) return;
-    // 性能：DOM 变动后 150ms 才跑一次（滚动期间合并成一次），不再每帧跑
-    let timer = 0;
-    const run = () => { timer = 0; llMarkdownPass(); llAtPass(); };
-    window.__llMdObserver = new MutationObserver(records => {
-        try { llHandleAdded(records); } catch (e) {}
-        if (!timer) timer = setTimeout(run, 150);
-    });
-    window.__llMdObserver.observe(document.body, { childList: true, subtree: true });
-    window.addEventListener("storage", e => { if (e.key === LL_MD_KEY) llMarkdownPass(); });
-    run();
+    window.__llMdObserver = true;
+    // Message observer owns the only message scan and animation pass.
+    window.addEventListener('storage', e => { if (e.key === LL_MD_KEY) llMarkdownPass(); });
+    llMarkdownPass(); llAtPass();
 }
 
 function buildMarkdownControls(host) {
@@ -3069,10 +3158,10 @@ function llLoadSelfUid() {
     window.liuli_api.selfUid().then(uid => { if (uid) { llSelfUid = String(uid); llAtPass(); } }).catch(() => {});
 }
 
-function llAtPass() {
+function llAtPass(root = document) {
     try {
         if (!llSelfUid) { llLoadSelfUid(); return; }
-        const ats = document.querySelectorAll(".ml-item .text-element--at");
+        const ats = root.querySelectorAll(".ml-item .text-element--at");
         for (let i = 0; i < ats.length; i++) {
             const at = ats[i];
             const holder = at.closest("[data-element-id]");
@@ -3204,4 +3293,42 @@ function buildFontControls(host) {
         }
         input.title = names.length ? "本机可用 " + names.length + " 种，点输入框可选" : "直接输入字体名";
     });
+}
+
+function installMaintenanceScheduler() {
+    let timer = 0, dirty = false;
+    const colorRoots = new Set();
+    const schedule = () => {
+        dirty = true;
+        if (!timer && !document.hidden) timer = setTimeout(run, 180);
+    };
+    function run() {
+        timer = 0;
+        if (!dirty || document.hidden || window.__liuliPause) return;
+        if (performance.now() - (window.__llScrollT || 0) < 150) { timer = setTimeout(run, 180); return; }
+        dirty = false; observer.disconnect();
+        try {
+            applyOverrides(); fixContrast(); keepWindowControlsVisible();
+            mountInputBar(); ensureHoverEntries(); llWatchContactList(); llGroupMembersPass(); llLayoutPass();
+            for (const root of colorRoots) if (root.isConnected) normalizeColors(root);
+            colorRoots.clear();
+        } finally { observe(); }
+    }
+    const observer = new MutationObserver(records => {
+        let changed = false;
+        for (const record of records) {
+            const target = record.target.nodeType === 1 ? record.target : record.target.parentElement;
+            if (target?.closest('.chat-msg-area, #liuli-embedded, .liuli-panel, .liuli-contact-projection')) continue;
+            if ([...record.addedNodes, ...record.removedNodes].length && [...record.addedNodes, ...record.removedNodes].every(n => n.nodeType === 1 && n.matches('.liuli-contact-projection'))) continue;
+            changed = true;
+            for (const node of record.addedNodes) if (node.nodeType === 1) colorRoots.add(node);
+        }
+        if (changed) schedule();
+    });
+    function observe() { observer.observe(document.body, { childList: true, subtree: true }); }
+    observe(); schedule();
+    window.addEventListener('hashchange', schedule);
+    window.addEventListener('popstate', schedule);
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) { llScheduleColorWork(); schedule(); } });
+    window.addEventListener('pagehide', () => { clearTimeout(timer); observer.disconnect(); }, { once: true });
 }
