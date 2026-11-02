@@ -207,7 +207,7 @@ body[data-liuli-scope="main"] #liuli-window-drag[data-interactive]:hover .liuli-
 }
 body[data-liuli-scope="main"] #liuli-window-drag[data-pressed] .liuli-drag-shape::before {
   opacity: 1;
-  transform: translateX(-50%) scale(1.3,1.25);
+  transform: translateX(-50%) scale(1.08,1.18);
   box-shadow: 0 0 8px color-mix(in srgb, var(--ll-brand) 45%, transparent);
   transition-duration: 160ms, 160ms, 160ms;
   transition-timing-function: cubic-bezier(.16,1,.3,1);

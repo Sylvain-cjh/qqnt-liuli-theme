@@ -7,7 +7,9 @@ export function installDragHandle(handle, notify) {
     handle.dataset.interactive = '1';
     let pointer = null, frame = 0, started = false;
     let lastFrame = 0, previous = null, movedAt = 0, vx = 0, vy = 0, needsMove = false;
-    let x = 0, y = 0, dx = 0, dy = 0;
+    const left = { x: 0, y: 0, dx: 0, dy: 0 }, right = { x: 0, y: 0, dx: 0, dy: 0 };
+    let inputX = 0, inputY = 0, direction = 1;
+    const limit = (value, maximum) => Math.max(-maximum, Math.min(maximum, value));
     function wake() {
         if (!frame) { lastFrame = performance.now(); frame = requestAnimationFrame(move); }
     }
@@ -18,21 +20,37 @@ export function installDragHandle(handle, notify) {
         if (started && pointer !== null && needsMove) { api.moveWindowDrag(); needsMove = false; }
         if (pointer === null || now - movedAt > 40) { vx *= Math.exp(-dt / .07); vy *= Math.exp(-dt / .07); }
         const speed = Math.hypot(vx, vy);
-        const strength = pointer === null ? 0 : Math.tanh(speed / 1.2);
-        const tx = speed > .001 ? vx / speed * strength : 0;
-        const ty = speed > .001 ? vy / speed * strength : 0;
+        const nextX = limit(vx * 1000, 1000), nextY = limit(vy * 1000, 1000);
+        const impulseX = limit(nextX - inputX, 700), impulseY = limit(nextY - inputY, 700);
+        inputX = nextX; inputY = nextY;
+        if (Math.abs(nextX) > 20) direction = Math.sign(nextX);
+        // Both ends inherit acceleration, but the trailing end catches up later.
+        for (const end of [left, right]) {
+            end.dx = limit(end.dx - impulseX * .13, 160);
+            end.dy = limit(end.dy - impulseY * .08, 100);
+        }
         const steps = Math.ceil(dt / .008), h = dt / steps;
         for (let i = 0; i < steps; i++) {
-            dx += ((tx - x) * 380 - dx * 34) * h;
-            dy += ((ty - y) * 380 - dy * 34) * h;
-            x += dx * h; y += dy * h;
+            for (const end of [left, right]) {
+                const leading = end === (direction < 0 ? left : right);
+                const stiffness = leading ? 660 : 260, damping = leading ? 36 : 19;
+                end.dx += (-end.x * stiffness - end.dx * damping) * h;
+                end.dy += (-end.y * stiffness - end.dy * damping) * h;
+                end.x = limit(end.x + end.dx * h, 7);
+                end.y = limit(end.y + end.dy * h, 3);
+            }
         }
-        const magnitude = Math.min(1, Math.hypot(x, y));
-        const length = Math.hypot(x, y) || 1, nx = x / length, ny = y / length;
-        const stretch = magnitude * .46, shear = stretch * nx * ny;
-        shape.style.transform = `matrix(${1 + stretch * nx * nx},${shear},${shear},${1 + stretch * ny * ny},${nx * magnitude * 7},${ny * magnitude * 5})`;
-        if (speed > .005 || Math.abs(x) + Math.abs(y) + Math.abs(dx) + Math.abs(dy) > .005) frame = requestAnimationFrame(move);
-        else shape.style.removeProperty('transform');
+        const extension = limit((right.x - left.x) / 56, .16);
+        const slope = limit((right.y - left.y) / 56, .065);
+        const centerX = limit((left.x + right.x) / 2, 4);
+        const centerY = limit((left.y + right.y) / 2, 2);
+        shape.style.transform = 'matrix(' + (1 + extension) + ',' + slope + ',' + (-slope * .15) + ',' + (1 - extension * .22) + ',' + centerX + ',' + centerY + ')';
+        const energy = [left, right].reduce((sum, end) => sum + Math.abs(end.x) + Math.abs(end.y) + Math.abs(end.dx) + Math.abs(end.dy), 0);
+        if (speed > .005 || energy > .03) frame = requestAnimationFrame(move);
+        else {
+            shape.style.removeProperty('transform'); inputX = inputY = 0;
+            for (const end of [left, right]) end.x = end.y = end.dx = end.dy = 0;
+        }
     };
     function finish() {
         const id = pointer;
@@ -50,7 +68,7 @@ export function installDragHandle(handle, notify) {
         event.preventDefault(); event.stopPropagation();
         pointer = event.pointerId;
         previous = { x: event.screenX, y: event.screenY, at: performance.now() };
-        vx = vy = 0;
+        vx = vy = 0; inputX = inputY = 0;
         handle.setPointerCapture(pointer);
         handle.dataset.pressed = '1';
         try {
