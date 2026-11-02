@@ -143,19 +143,50 @@ body[data-liuli-scope="main"] .message-container > .avatar-span {
   will-change: auto !important;
 }
 
-/* Window buttons emerge from the right hint; CSS transitions reverse in place. */
+/* The same capsule morphs from its 28x4 hint; no opacity or blur crossfade. */
+body[data-liuli-scope="main"]:not([data-liuli-tb="native"]) .topbar-content .user-profile-card.topbar-profile,
 body[data-liuli-scope="main"]:not([data-liuli-tb="native"]) .window-title-bar .window-control-area {
-  transform-origin: right top !important;
-  transform: translateY(-7px) scale(.94) !important;
-  transition: opacity 180ms cubic-bezier(.4,0,.2,1) 120ms,
-    transform 240ms cubic-bezier(.4,0,.2,1) 120ms !important;
+  opacity: 1 !important;
+  transform: translateY(-4px) !important;
+  background-color: color-mix(in srgb, var(--ll-on-glass) 70%, transparent) !important;
+  transition: clip-path 300ms cubic-bezier(.4,0,.2,1) 120ms,
+    transform 300ms cubic-bezier(.4,0,.2,1) 120ms,
+    background-color 240ms cubic-bezier(.4,0,.2,1) 120ms !important;
 }
+body[data-liuli-scope="main"]:not([data-liuli-tb="native"]) .topbar-content .user-profile-card.topbar-profile {
+  clip-path: inset(0 calc(100% - 44px) calc(100% - 4px) 16px round 2px) !important;
+}
+body[data-liuli-scope="main"]:not([data-liuli-tb="native"]) .window-title-bar .window-control-area {
+  clip-path: inset(0 16px calc(100% - 4px) calc(100% - 44px) round 2px) !important;
+}
+body[data-liuli-scope="main"]:not([data-liuli-tb="native"])[data-liuli-r-l] .topbar-content .user-profile-card.topbar-profile,
+body[data-liuli-scope="main"]:not([data-liuli-tb="native"]) .topbar-content .user-profile-card.topbar-profile:hover,
+body[data-liuli-scope="main"]:not([data-liuli-tb="native"]) .topbar-content .user-profile-card.topbar-profile:has(:focus-visible),
 body[data-liuli-scope="main"]:not([data-liuli-tb="native"])[data-liuli-r-r] .window-title-bar .window-control-area,
 body[data-liuli-scope="main"]:not([data-liuli-tb="native"]) .window-title-bar .window-control-area:hover,
 body[data-liuli-scope="main"]:not([data-liuli-tb="native"]) .window-title-bar .window-control-area:has(:focus-visible) {
-  transform: translateY(0) scale(1) !important;
-  transition: opacity 220ms cubic-bezier(.16,1,.3,1),
-    transform 340ms cubic-bezier(.22,1.12,.36,1) !important;
+  opacity: 1 !important;
+  clip-path: inset(-20px -20px -20px -20px round 12px) !important;
+  transform: translateY(0) !important;
+  background-color: rgba(var(--ll-acrylic), var(--ll-pill-opacity)) !important;
+  transition: clip-path 360ms cubic-bezier(.22,1,.36,1),
+    transform 360ms cubic-bezier(.22,1,.36,1),
+    background-color 280ms cubic-bezier(.22,1,.36,1) !important;
+}
+body[data-liuli-scope="main"]:not([data-liuli-tb="native"]) :is(.user-profile-card.topbar-profile, .window-control-area) > * {
+  clip-path: inset(0 0 100% 0) !important;
+  transition: clip-path 240ms cubic-bezier(.4,0,.2,1) 120ms !important;
+}
+body[data-liuli-scope="main"]:not([data-liuli-tb="native"])[data-liuli-r-l] .topbar-content .user-profile-card.topbar-profile > *,
+body[data-liuli-scope="main"]:not([data-liuli-tb="native"]) .topbar-content .user-profile-card.topbar-profile:is(:hover,:has(:focus-visible)) > *,
+body[data-liuli-scope="main"]:not([data-liuli-tb="native"])[data-liuli-r-r] .window-title-bar .window-control-area > *,
+body[data-liuli-scope="main"]:not([data-liuli-tb="native"]) .window-title-bar .window-control-area:is(:hover,:has(:focus-visible)) > * {
+  clip-path: inset(0 0 0 0) !important;
+  transition: clip-path 300ms cubic-bezier(.22,1,.36,1) !important;
+}
+body[data-liuli-scope="main"]:not([data-liuli-tb="native"]) :is(#liuli-top-hint-l, #liuli-top-hint-r)::after {
+  opacity: 0 !important;
+  transition: none !important;
 }
 /* Hidden windows release theme-owned decorative surfaces; QQ data is untouched. */
 body[data-liuli-idle] #app::before { display: none !important; }
