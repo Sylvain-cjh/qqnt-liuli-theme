@@ -8,6 +8,8 @@ export function installContactParallax() {
     const offsets = new Map();
     const spacing = new Map();
     let layoutRoot = null;
+    let positionCache = null, positionRoot = null;
+    const layoutResize = new ResizeObserver(() => { positionCache = null; if (active || returning.size) wake(); });
     let lastFrame = 0;
     let active = null, frame = 0;
     const returning = new Map();
@@ -26,28 +28,34 @@ export function installContactParallax() {
             attributes: true, attributeFilter: ['class', 'data-contact-id'] });
         return true;
     }
-    function syncProjection(state, animate = false) {
+    function syncProjection(state, animate = false, contentDirty = true) {
         if (!state.row.isConnected || state.row.getAttribute('data-contact-id') !== state.contactId) {
             if (active === state) reset(true);
             else restore(state);
             return;
         }
         const selected = state.row.classList.contains('recent-contact-item--selected');
-        const visual = state.row.cloneNode(true);
+        const rebuild = contentDirty || !state.overlay.firstElementChild;
+        const visual = rebuild ? state.row.cloneNode(true) : state.overlay.firstElementChild;
+        visual.className = state.row.className;
         visual.setAttribute('data-liuli-projection', '');
-        visual.removeAttribute('id');
-        for (const child of visual.querySelectorAll('[id]')) child.removeAttribute('id');
-        visual.style.cssText += `;position:relative!important;inset:auto!important;margin:0!important;width:${state.bounds.width}px!important;height:${state.bounds.height}px!important;min-height:0!important;max-height:none!important;zoom:${scale}!important;transform:none!important;translate:none!important;opacity:1!important;transition:none!important;pointer-events:none!important;`;
-        const computed = getComputedStyle(state.row);
-        for (const property of computed) {
-            if (property.startsWith('--')) state.overlay.style.setProperty(property, computed.getPropertyValue(property));
+        if (rebuild) {
+            visual.removeAttribute('id');
+            for (const child of visual.querySelectorAll('[id]')) child.removeAttribute('id');
+            visual.style.cssText += `;position:relative!important;inset:auto!important;margin:0!important;width:${state.bounds.width}px!important;height:${state.bounds.height}px!important;min-height:0!important;max-height:none!important;zoom:${scale}!important;transform:none!important;translate:none!important;opacity:1!important;transition:none!important;pointer-events:none!important;`;
         }
-        state.selectionAnimation?.cancel();
-        state.overlay.replaceChildren(visual);
+        if (rebuild || selected !== state.selected) {
+            const computed = getComputedStyle(state.row);
+            for (const property of computed) {
+                if (property.startsWith('--')) state.overlay.style.setProperty(property, computed.getPropertyValue(property));
+            }
+        }
+        if (rebuild) { state.selectionAnimation?.cancel(); state.overlay.replaceChildren(visual); }
         if (animate && selected && !state.selected) state.selectionStarted = performance.now();
-        if (!selected) state.selectionStarted = null;
+        if (!selected) { state.selectionStarted = null; state.selectionAnimation?.cancel(); }
         const elapsed = state.selectionStarted == null ? 380 : performance.now() - state.selectionStarted;
-        if (selected && elapsed < 380 && visual.animate) {
+        if (selected && elapsed < 380 && visual.animate && (rebuild || !state.selected)) {
+            state.selectionAnimation?.cancel();
             const dy = state.selectionOrigin ? (state.selectionOrigin.top - state.bounds.top) / scale : 0;
             state.selectionAnimation = visual.animate([
                 { opacity: 0.35, transform: `translateY(${dy}px) scale(.96)` },
@@ -65,13 +73,19 @@ export function installContactParallax() {
     };
     function own(state, node, property, value) {
         if (!node) return;
-        let record = state.styles.find(r => r.node === node && r.property === property);
+        state.styleIndex ||= new WeakMap();
+        let properties = state.styleIndex.get(node);
+        if (!properties) { properties = new Map(); state.styleIndex.set(node, properties); }
+        let record = properties.get(property);
         if (!record) {
             record = { node, property, value: node.style.getPropertyValue(property),
                 priority: node.style.getPropertyPriority(property), written: '' };
             state.styles.push(record);
+            properties.set(property, record);
         }
+        if (record.input === value && node.style.getPropertyValue(property) === record.written) return;
         node.style.setProperty(property, value, 'important');
+        record.input = value;
         // CSSOM normalizes decimals and shorthand syntax. Compare its serialized
         // value during cleanup, rather than the unnormalized input string.
         record.written = node.style.getPropertyValue(property);
@@ -84,6 +98,7 @@ export function installContactParallax() {
         }
         state.row?.removeAttribute('data-liuli-depth');
         state.styles = [];
+        state.styleIndex = new WeakMap();
     }
     function restore(state) {
         // Returning states are advanced by the shared frame loop.
@@ -125,7 +140,8 @@ export function installContactParallax() {
             selectionOrigin: row.parentElement.querySelector('.recent-contact-item--selected')?.getBoundingClientRect(),
             observer: new MutationObserver(records => {
                 if (!retainRow(state)) { restore(state); if (active === state) active = null; return; }
-                if (records.some(r => r.target === state.row || state.row.contains(r.target))) syncProjection(state, true);
+                const relevant = records.filter(r => r.target === state.row || state.row.contains(r.target));
+                if (relevant.length) syncProjection(state, true, relevant.some(r => r.type !== 'attributes' || r.target !== state.row));
             }) };
         active = state;
         // Virtual-list recycling must not carry the previous contact's tilt forward.
@@ -136,10 +152,6 @@ export function installContactParallax() {
         overlay.className = 'recent-contact liuli-contact-projection';
         overlay.setAttribute('aria-hidden', 'true');
         overlay.setAttribute('popover', 'manual');
-        const computed = getComputedStyle(row);
-        for (const property of computed) {
-            if (property.startsWith('--')) overlay.style.setProperty(property, computed.getPropertyValue(property));
-        }
         overlay.style.cssText += `;position:fixed!important;inset:auto!important;left:${bounds.left}px!important;top:${bounds.top - bounds.height * expansion}px!important;width:${bounds.width * scale}px!important;height:${bounds.height * scale}px!important;margin:0!important;padding:0!important;border:0!important;background:transparent!important;overflow:visible!important;pointer-events:none!important;z-index:2147483000!important;transition:none!important;transform-origin:left center;transform:perspective(900px) scale(${1 / scale});`;
         document.body.append(overlay);
         if (overlay.showPopover) overlay.showPopover();
@@ -170,10 +182,15 @@ export function installContactParallax() {
             releaseStyles(layout); offsets.clear(); spacing.clear(); return;
         }
         layoutRoot = root;
-        const positions = [...root.querySelectorAll(selector)].map(row => {
-            const rect = row.getBoundingClientRect();
-            return { row, restingTop: rect.top - (offsets.get(row) || 0) };
-        });
+        if (!positionCache || positionRoot !== root) {
+            if (positionRoot !== root) { layoutResize.disconnect(); layoutResize.observe(root); }
+            positionRoot = root;
+            positionCache = [...root.querySelectorAll(selector)].map(row => {
+                const rect = row.getBoundingClientRect();
+                return { row, restingTop: rect.top - (offsets.get(row) || 0) };
+            });
+        }
+        const positions = positionCache;
         for (const { row, restingTop } of positions) {
             let above = 0, below = 0;
             for (const state of live) {
@@ -198,7 +215,8 @@ export function installContactParallax() {
         }
         for (const state of live) {
             state.renderTop += (state.bounds.top - state.renderTop) * (1 - Math.exp(-dt / 85));
-            state.overlay.style.top = `${state.renderTop - state.bounds.height * expansion}px`;
+            const top = `${state.renderTop - state.bounds.height * expansion}px`;
+            if (state.overlay.style.top !== top) state.overlay.style.top = top;
             if (Math.abs(state.renderTop - state.bounds.top) > .05) moving = true;
             const actualScale = 1 + (scale - 1) * state.eased;
             const shift = offsets.get(state.row) || 0;
@@ -260,6 +278,7 @@ export function installContactParallax() {
         for (const state of [...returning.keys()]) restore(state);
         cancelAnimationFrame(frame); frame = 0;
         releaseStyles(layout); offsets.clear(); spacing.clear(); layoutRoot = null;
+        positionCache = null; positionRoot = null; layoutResize.disconnect();
     }
     // Clear before wheel scrolling changes native virtual-list geometry. Scroll
     // also covers scrollbar dragging, keyboard navigation and programmatic moves.
@@ -306,6 +325,7 @@ export function installContactParallax() {
             record.target.classList.contains('recent-contact-item--selected'));
         if (!structural && !selection) return;
         if (structural) {
+            positionCache = null;
             for (const state of [...returning.keys(), ...(active ? [active] : [])]) {
                 if (!retainRow(state)) continue;
                 const rect = state.row.getBoundingClientRect();
@@ -326,6 +346,7 @@ export function installContactParallax() {
     }, { capture: true, passive: true });
     function dispose() {
         clearForScroll();
+        layoutResize.disconnect();
         reorderObserver.disconnect(); cancelAnimationFrame(reorderFrame); reorderAnimation?.cancel();
         for (const remove of listeners) remove();
     }

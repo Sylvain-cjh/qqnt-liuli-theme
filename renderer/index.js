@@ -3318,7 +3318,7 @@ function installMaintenanceScheduler() {
         let changed = false;
         for (const record of records) {
             const target = record.target.nodeType === 1 ? record.target : record.target.parentElement;
-            if (target?.closest('.chat-msg-area, #liuli-embedded, .liuli-panel, .liuli-contact-projection')) continue;
+            if (target?.closest('.chat-msg-area, #liuli-embedded, .liuli-panel, .liuli-contact-projection, .recent-contact, .group-member')) continue;
             if ([...record.addedNodes, ...record.removedNodes].length && [...record.addedNodes, ...record.removedNodes].every(n => n.nodeType === 1 && n.matches('.liuli-contact-projection'))) continue;
             changed = true;
             for (const node of record.addedNodes) if (node.nodeType === 1) colorRoots.add(node);
