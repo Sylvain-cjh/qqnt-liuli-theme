@@ -1247,19 +1247,25 @@ function llGroupMembersPass() {
 var llSideRaf = 0;
 function installSideListObserver() {
     if (window.__liuliSideObs) return;
+    let contactsDirty = false, membersDirty = false;
     var obs = new MutationObserver(function (recs) {
-        var hit = false;
-        for (var i = 0; i < recs.length && !hit; i++) {
+        for (var i = 0; i < recs.length; i++) {
             var t = recs[i].target;
             if (t && t.nodeType !== 1) t = t.parentElement;
             if (t?.closest?.(".liuli-contact-projection")) continue;
-            if (t && t.closest && t.closest(".group-member, .recent-contact, .two-col-layout__aside")) hit = true;
+            if (t?.closest?.('.recent-contact, .two-col-layout__aside')) contactsDirty = true;
+            if (t?.closest?.('.group-member')) membersDirty = true;
         }
-        if (!hit || llSideRaf) return;
+        if ((!contactsDirty && !membersDirty) || llSideRaf) return;
         // 合并到一帧：选人对话框等一次挂几千个节点时不会被触发成百上千次
         llSideRaf = requestAnimationFrame(function () {
             llSideRaf = 0;
-            try { llWatchContactList(); llGroupMembersPass(); } catch (e) {}
+            try {
+                const contacts = contactsDirty, members = membersDirty;
+                contactsDirty = membersDirty = false;
+                if (contacts) llWatchContactList();
+                if (members) llGroupMembersPass();
+            } catch (e) {}
         });
     });
     obs.observe(document.body, { childList: true, subtree: true });
@@ -1379,7 +1385,7 @@ function installMessageObserver() {
         let hit = false;
         for (const rec of records) {
             const target = rec.target.nodeType === 1 ? rec.target : rec.target.parentElement;
-            if (target?.closest('.liuli-contact-projection, #liuli-embedded, .liuli-panel')) continue;
+            if (target?.closest('.liuli-contact-projection, #liuli-embedded, .liuli-panel, .recent-contact, .group-member, .container-sidebar')) continue;
             const area = target?.closest('.chat-msg-area');
             if (area) {
                 const item = target.closest('.ml-item[id]');
@@ -3328,6 +3334,8 @@ function installMaintenanceScheduler() {
         for (const record of records) {
             const target = record.target.nodeType === 1 ? record.target : record.target.parentElement;
             if (target?.closest('.chat-msg-area, #liuli-embedded, .liuli-panel, .liuli-contact-projection')) continue;
+            // Side-list observers own these updates; do not run whole-page work.
+            if (target?.closest('.recent-contact, .group-member')) continue;
             if ([...record.addedNodes, ...record.removedNodes].length && [...record.addedNodes, ...record.removedNodes].every(n => n.nodeType === 1 && n.matches('.liuli-contact-projection'))) continue;
             changed = true;
             for (const node of record.addedNodes) if (node.nodeType === 1) colorRoots.add(node);
