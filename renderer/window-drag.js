@@ -1,3 +1,4 @@
+import { isThemeActive, onThemeActivity } from './activity.js';
 import { loadEffects, subscribeEffects } from './effect-settings.js';
 export function installDragHandle(handle, notify) {
     const api = window.liuli_api;
@@ -12,9 +13,11 @@ export function installDragHandle(handle, notify) {
     const thickness = { value: 0, velocity: 0 };
     let lastFrame = 0, previous = null, movedAt = 0, vx = 0, vy = 0, needsMove = false;
     const left = { x: 0, y: 0, dx: 0, dy: 0 }, right = { x: 0, y: 0, dx: 0, dy: 0 };
-    let inputX = 0, inputY = 0, direction = 1;
+    let pullX = 0, pullY = 0, direction = 1;
+    const samples = [];
     const limit = (value, maximum) => Math.max(-maximum, Math.min(maximum, value));
     function wake() {
+        if (!isThemeActive()) return;
         if (!frame) { lastFrame = performance.now(); frame = requestAnimationFrame(move); }
     }
     const move = now => {
@@ -24,23 +27,20 @@ export function installDragHandle(handle, notify) {
         if (started && pointer !== null && needsMove) { api.moveWindowDrag(); needsMove = false; }
         if (pointer === null || now - movedAt > 40) { vx *= Math.exp(-dt / .07); vy *= Math.exp(-dt / .07); }
         const speed = Math.hypot(vx, vy);
-        const nextX = limit(vx * 1000, 1000), nextY = limit(vy * 1000, 1000);
-        const impulseX = limit(nextX - inputX, 700), impulseY = limit(nextY - inputY, 700);
-        inputX = nextX; inputY = nextY;
-        if (Math.abs(nextX) > 20) direction = Math.sign(nextX);
-        // Both ends inherit acceleration, but the trailing end catches up later.
-        for (const end of [left, right]) {
-            const gain = options.jelly / .55;
-            end.dx = limit(end.dx - impulseX * .16 * gain, 160);
-            end.dy = limit(end.dy - impulseY * .1 * gain, 100);
-        }
+        const decay = Math.exp(-dt / (pointer === null ? .045 : .11));
+        pullX *= decay; pullY *= decay;
+        if (Math.abs(vx) > .02) direction = Math.sign(vx);
+        samples.push({ at: now, x: pullX, y: pullY });
+        while (samples.length > 2 && samples[1].at <= now - 55) samples.shift();
+        while (samples.length > 16) samples.shift();
+        const tail = samples[0] || { x: 0, y: 0 };
         const steps = Math.ceil(dt / .008), h = dt / steps;
         for (let i = 0; i < steps; i++) {
             for (const end of [left, right]) {
                 const leading = end === (direction < 0 ? left : right);
                 const stiffness = leading ? 1050 : 340, damping = leading ? 43 : 22;
-                end.dx += (-end.x * stiffness - end.dx * damping) * h;
-                end.dy += (-end.y * stiffness - end.dy * damping) * h;
+                end.dx += (((leading ? pullX : tail.x) - end.x) * stiffness - end.dx * damping) * h;
+                end.dy += (((leading ? pullY : tail.y) - end.y) * stiffness - end.dy * damping) * h;
                 end.x = limit(end.x + end.dx * h, 7);
                 end.y = limit(end.y + end.dy * h, 3);
             }
@@ -56,9 +56,9 @@ export function installDragHandle(handle, notify) {
         }
         shape.style.transform = 'matrix(' + (1 + extension) + ',' + slope + ',' + (-slope * .15) + ',' + (1 + thickness.value) + ',' + centerX + ',' + centerY + ')';
         const energy = Math.abs(thickness.value) + Math.abs(thickness.velocity) + [left, right].reduce((sum, end) => sum + Math.abs(end.x) + Math.abs(end.y) + Math.abs(end.dx) + Math.abs(end.dy), 0);
-        if (speed > .005 || energy > .03) frame = requestAnimationFrame(move);
+        if (speed > .005 || Math.abs(pullX) + Math.abs(pullY) > .02 || energy > .03) frame = requestAnimationFrame(move);
         else {
-            shape.style.removeProperty('transform'); inputX = inputY = 0;
+            shape.style.removeProperty('transform'); pullX = pullY = 0; samples.length = 0;
             for (const end of [left, right]) end.x = end.y = end.dx = end.dy = 0;
             thickness.value = thickness.velocity = 0;
         }
@@ -75,11 +75,13 @@ export function installDragHandle(handle, notify) {
         if (id !== null) wake();
     }
     handle.addEventListener('pointerdown', async event => {
-        if (event.button !== 0 || !event.isPrimary || pointer !== null) return;
+        if (!isThemeActive() || event.button !== 0 || !event.isPrimary || pointer !== null) return;
         event.preventDefault(); event.stopPropagation();
         pointer = event.pointerId;
         previous = { x: event.screenX, y: event.screenY, at: performance.now() };
-        vx = vy = 0; inputX = inputY = 0;
+        vx = vy = 0; pullX = pullY = 0;
+        samples.length = 0;
+        samples.push({ at: performance.now() - 60, x: (left.x + right.x) / 2, y: (left.y + right.y) / 2 });
         handle.setPointerCapture(pointer);
         handle.dataset.pressed = '1';
         try {
@@ -101,6 +103,13 @@ export function installDragHandle(handle, notify) {
         const now = performance.now();
         if (previous && (event.screenX !== previous.x || event.screenY !== previous.y)) {
             const dt = Math.max(4, now - previous.at);
+            const gain = options.jelly / .55;
+            const mx = event.screenX - previous.x, my = event.screenY - previous.y;
+            pullX = limit(pullX + mx * .42 * gain, 8);
+            pullY = limit(pullY + my * .25 * gain, 3);
+            const leading = mx < 0 || (mx === 0 && direction < 0) ? left : right;
+            leading.x = limit(leading.x + mx * .14 * gain, 7);
+            leading.y = limit(leading.y + my * .1 * gain, 3);
             vx += (((event.screenX - previous.x) / dt) - vx) * .7;
             vy += (((event.screenY - previous.y) / dt) - vy) * .7;
             movedAt = now;
@@ -109,6 +118,13 @@ export function installDragHandle(handle, notify) {
         needsMove = true; wake();
     });
     for (const type of ['pointerup', 'pointercancel', 'lostpointercapture']) handle.addEventListener(type, finish);
+    const unsubscribeActivity = onThemeActivity(enabled => {
+        if (enabled) return;
+        finish(); cancelAnimationFrame(frame); frame = 0;
+        pullX = pullY = vx = vy = 0; samples.length = 0;
+        for (const end of [left, right]) end.x = end.y = end.dx = end.dy = 0;
+        thickness.value = thickness.velocity = 0; shape.style.removeProperty('transform');
+    });
     window.addEventListener('blur', finish);
-    window.addEventListener('pagehide', () => { finish(); cancelAnimationFrame(frame); frame = 0; unsubscribe(); }, { once: true });
+    window.addEventListener('pagehide', () => { finish(); cancelAnimationFrame(frame); frame = 0; unsubscribe(); unsubscribeActivity(); }, { once: true });
 }

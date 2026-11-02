@@ -5,6 +5,7 @@ let runtime, watcher, timer, loginUid = '', stopped = false;
 const registry = globalThis[Symbol.for('liuli.theme.supervisor')] ||= { current: null };
 registry.current?.dispose();
 const changed = new Set();
+const visibilityListeners = new Map();
 const state = { enabled: LiteLoader.api.config.get(configKey, { enabled: true }).enabled !== false,
     loadedVersion: '', lastUpdate: '', error: '', watching: false };
 const controls = ['themeInfo','themeReload','themeAuto','themeMemory'];
@@ -21,6 +22,22 @@ function windows() {
         try { return !window.isDestroyed() && !window.webContents.isDestroyed() && ['file:', 'local:', 'app:'].includes(new URL(window.webContents.getURL()).protocol); }
         catch { return false; }
     });
+}
+function watchVisibility(window) {
+    if (!window || window.isDestroyed() || visibilityListeners.has(window)) return;
+    const contents = window.webContents;
+    const send = () => {
+        if (window.isDestroyed() || contents.isDestroyed()) return;
+        try { contents.send(channel('themeUpdate'), { type: 'visibility', visible: window.isVisible() && !window.isMinimized() }); } catch {}
+    };
+    const remove = () => {
+        for (const name of ['show','hide','minimize','restore']) window.removeListener(name, send);
+        contents.removeListener('did-finish-load', send);
+        window.removeListener('closed', remove); visibilityListeners.delete(window);
+    };
+    for (const name of ['show','hide','minimize','restore']) window.on(name, send);
+    contents.on('did-finish-load', send); window.once('closed', remove);
+    visibilityListeners.set(window, remove);
 }
 function report() { for (const window of windows()) { try { window.webContents.send(channel('themeUpdate'), { type: 'status', ...info() }); } catch {} } }
 function clean() {
@@ -94,7 +111,12 @@ function apply(files, manual = false) {
             for (const window of windows()) { try { window.webContents.send(channel('themeUpdate'), { type: 'css', css }); } catch {} }
         }
         state.lastUpdate = new Date().toISOString(); report();
-    } catch (error) { state.error = error.message || String(error); report(); }
+    } catch (error) {
+        state.error = error.message || String(error);
+        for (const file of files.length ? files : ['main/runtime.js']) changed.add(file);
+        // Wait for the next file write or manual request; never retry in a busy loop.
+        report();
+    }
     return info();
 }
 function schedule(file) {
@@ -107,6 +129,7 @@ function schedule(file) {
 function stop() {
     if (stopped) return;
     stopped = true; clearTimeout(timer); changed.clear(); watcher?.close(); state.watching = false;
+    for (const remove of [...visibilityListeners.values()]) remove();
     for (const name of controls) ipcMain.removeHandler(channel(name));
     clean();
     runtime = null; watcher = null; timer = null;
@@ -114,15 +137,20 @@ function stop() {
 }
 function start() {
 load();
+for (const window of windows()) watchVisibility(window);
 try {
     watcher = fs.watch(root, { recursive: true, persistent: false }, (_event, file) => schedule(file));
     state.watching = true;
     watcher.on('error', error => { state.error = error.message; state.watching = false; watcher.close(); report(); });
 } catch (error) { state.error = error.message; }
-ipcMain.handle(channel('themeInfo'), event => { if (!valid(event)) throw Error('Window unavailable'); return info(); });
+ipcMain.handle(channel('themeInfo'), event => {
+    if (!valid(event)) throw Error('Window unavailable');
+    const window = BrowserWindow.fromWebContents(event.sender);
+    return { ...info(), windowVisible: window.isVisible() && !window.isMinimized() };
+});
 ipcMain.handle(channel('themeMemory'), event => {
     if (!valid(event)) throw Error('Window unavailable');
-    return { currentRendererPid: event.sender.getOSProcessId(), processes: app.getAppMetrics().map(metric => ({
+    return { currentRendererPid: event.sender.getOSProcessId(), hardwareAcceleration: app.isHardwareAccelerationEnabled(), processes: app.getAppMetrics().map(metric => ({
         pid: metric.pid, type: metric.type, workingSetMB: Math.round(metric.memory.workingSetSize / 102.4) / 10,
         privateMB: metric.memory.privateBytes == null ? null : Math.round(metric.memory.privateBytes / 102.4) / 10
     })) };
@@ -140,7 +168,7 @@ ipcMain.handle(channel('themeAuto'), (event, enabled) => {
 });
 registry.current = {
     onLogin(uid) { loginUid = String(uid || ''); runtime?.onLogin?.(uid); },
-    onBrowserWindowCreated(window) { runtime?.onBrowserWindowCreated?.(window); },
+    onBrowserWindowCreated(window) { watchVisibility(window); runtime?.onBrowserWindowCreated?.(window); },
     dispose: stop
 };
 }

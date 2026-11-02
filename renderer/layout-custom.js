@@ -6,6 +6,7 @@
 // 设置存在 localStorage（设置窗口和主界面同源，storage 事件实时同步）。
 // 菜单项、工具栏按钮、侧栏按钮都是运行时见到一个记一个（SEEN），设置页按这份名单列出来。
 
+import { isThemeActive, onThemeActivity } from './activity.js';
 const KEY = "liuli-layout";
 const SEEN_KEY = "liuli-layout-seen";
 const DEFAULTS = { menuCompact: false, menuOrder: [], barOrder: [], barPinned: 1, navHidden: [], titlebar: "float" };
@@ -72,14 +73,20 @@ export function applyMenu(menu) {
 }
 
 function watchMenus() {
+    let frame = 0;
+    onThemeActivity(enabled => { if (!enabled) { cancelAnimationFrame(frame); frame = 0; } });
     // 菜单在右键之后才挂进来，挂上后连追几帧（复读之类的插件项也是之后才插进去的）
     document.addEventListener("contextmenu", () => {
+        if (!isThemeActive()) return;
+        cancelAnimationFrame(frame);
         let n = 0;
         const tick = () => {
+            frame = 0;
+            if (!isThemeActive()) return;
             document.querySelectorAll(".q-context-menu.aio-right-click-menu").forEach(applyMenu);
-            if (++n < 20) requestAnimationFrame(tick);
+            if (++n < 20) frame = requestAnimationFrame(tick);
         };
-        requestAnimationFrame(tick);
+        frame = requestAnimationFrame(tick);
     }, true);
 }
 
@@ -169,6 +176,7 @@ export function applyNav() {
 /* ════════════════ 汇总 ════════════════ */
 let onBarChange = null;
 export function applyAll() {
+    if (!isThemeActive()) return;
     try {
         const cfg = loadLayout();
         document.body.toggleAttribute("data-liuli-menu-compact", !!cfg.menuCompact);
@@ -186,6 +194,7 @@ export function installLayout(barChanged) {
     watchMenus();
     addEventListener("storage", e => { if (e.key === KEY) applyAll(); });
     applyAll();
+    onThemeActivity(enabled => { if (enabled) applyAll(); });
 }
 
 /* ════════════════ 设置页 ════════════════ */

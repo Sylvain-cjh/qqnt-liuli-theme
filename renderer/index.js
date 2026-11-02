@@ -11,6 +11,16 @@ import { installContactParallax } from "./contact-parallax.js";
 import { installDragHandle } from "./window-drag.js";
 import { buildEffectSettings } from "./effect-settings.js";
 import { installThemeUpdates, buildHotUpdateSettings } from "./hot-update.js";
+import { isThemeActive, onThemeActivity, activeInterval, refreshSurfaceState } from "./activity.js";
+const llOwnedAnimations = new Set();
+let llDeferredSettings = false, llDeferredWallpaper = false, llDeferredPalette = false;
+function animateOwned(element, keyframes, options) {
+    if (!isThemeActive()) return null;
+    const animation = element.animate(keyframes, options);
+    llOwnedAnimations.add(animation);
+    animation.finished.then(() => llOwnedAnimations.delete(animation), () => llOwnedAnimations.delete(animation));
+    return animation;
+}
 import { ROLE_KEY, loadRoles, roleVars, accentPalette, buildRoleControls } from "./color-roles.js";
 // 诊断运行时（契约 installer/DIAG-COVERAGE.md 第三、3.2、3.3、3.5 节）：
 // 尽早安装，后面整个模块体里任何 console.error / 未捕获异常 / Promise 拒绝
@@ -59,7 +69,8 @@ function installRouteScope() {
     sync();
     addEventListener("hashchange", sync);
     addEventListener("popstate", sync);
-    setInterval(sync, 400);
+    activeInterval(sync, 400);
+    onThemeActivity(enabled => { if (enabled) sync(); });
 }
 
 /* ---------- 壁纸取色（照搬 dsh liuli-runtime.ts） ----------
@@ -324,9 +335,10 @@ function normalizeColors(root) {
     llQueueColorRoot(root);
 }
 
-const llColorRoots = new WeakSet();
+let llColorRoots = new WeakSet();
 const llColorJobs = [];
 let llColorScheduled = false;
+let llColorHandle = 0, llColorUsesIdle = false;
 function llQueueColorRoot(root) {
     if (!root || root.nodeType !== 1 || llColorRoots.has(root)) return;
     if (llColorJobs.length >= 96) {
@@ -338,11 +350,12 @@ function llQueueColorRoot(root) {
     llScheduleColorWork();
 }
 function llScheduleColorWork() {
-    if (llColorScheduled || !llColorJobs.length || document.hidden) return;
+    if (llColorScheduled || !llColorJobs.length || !isThemeActive()) return;
     llColorScheduled = true;
     const execute = () => {
+        llColorHandle = 0;
         llColorScheduled = false;
-        if (document.hidden) return;
+        if (!isThemeActive()) return;
         const start = performance.now();
         let processed = 0;
         while (llColorJobs.length && processed < 180 && performance.now() - start < 4) {
@@ -359,8 +372,8 @@ function llScheduleColorWork() {
         }
         llScheduleColorWork();
     };
-    if (window.requestIdleCallback) requestIdleCallback(execute, { timeout: 500 });
-    else setTimeout(execute, 80);
+    llColorUsesIdle = !!window.requestIdleCallback;
+    llColorHandle = llColorUsesIdle ? requestIdleCallback(execute, { timeout: 500 }) : setTimeout(execute, 80);
 }
 
 
@@ -535,13 +548,14 @@ function applySettings(cfg, broadcast) {
 try {
     window.addEventListener("storage", function (e) {
         if (e.key !== LL_STORAGE_KEY || !e.newValue) return;
+        if (!isThemeActive()) { llDeferredSettings = true; return; }
         try {
             // 别的窗口可能还是旧版（只写 dim），进来先统一迁移一遍
             const incoming = llNormalizeSettings(JSON.parse(e.newValue));
             llSuppressBroadcast = true;
             applySettings(incoming, false);
             // 面板若存在，同步滑条位置
-            const sliders = document.querySelectorAll(".liuli-slider");
+            const sliders = document.querySelectorAll("input[data-liuli-material]");
             if (sliders.length === FIELDS.length) {
                 FIELDS.forEach(function (f, i) {
                     const el = sliders[i];
@@ -1057,7 +1071,7 @@ function stickAvatars() {
 
 var liuliStickRaf = 0;
 function scheduleStick() {
-    if (liuliStickRaf) return;
+    if (!isThemeActive() || liuliStickRaf) return;
     liuliStickRaf = requestAnimationFrame(function () {
         liuliStickRaf = 0;
         stickAvatars();
@@ -1114,7 +1128,7 @@ function llRiseIn(els, step) {
     if (LL_REDUCED || !els.length || typeof els[0].animate !== "function") return;
     els.slice(0, 18).forEach(function (el, i) {
         try {
-            el.animate([{ opacity: 0, transform: "translateY(14px)" }, { opacity: 1, transform: "none" }],
+            animateOwned(el, [{ opacity: 0, transform: "translateY(14px)" }, { opacity: 1, transform: "none" }],
                 { duration: 460, delay: i * (step || 26), easing: LL_EASE, fill: "backwards" });
         } catch (e) {}
     });
@@ -1126,7 +1140,8 @@ function llRiseIn(els, step) {
  * 用 data-contact-id 判断是否真的换了会话：虚拟列表滚动时会复用节点、
  * 重挂 --selected 类，id 不变就不动。 */
 var llSel = { id: null, root: null, obs: null };
-function llWatchContactList() {
+function llWatchContactList(animateEntry = true) {
+    if (!isThemeActive()) return;
     var root = document.querySelector(".recent-contact");
     if (!root || llSel.root === root) return;
     if (llSel.obs) llSel.obs.disconnect();
@@ -1154,19 +1169,19 @@ function llWatchContactList() {
         try {
             if (lr && lr.height > 0) {
                 var dy = Math.round(lr.top - nr.top);
-                gained.animate([{ transform: "translateY(" + dy + "px)" }, { transform: "translateY(0)" }], {
+                animateOwned(gained, [{ transform: "translateY(" + dy + "px)" }, { transform: "translateY(0)" }], {
                     duration: Math.min(460, 240 + Math.abs(dy) * 0.22),
                     easing: "cubic-bezier(0.3, 1.25, 0.45, 1)",
                     pseudoElement: "::before"
                 });
             } else {
-                gained.animate([{ opacity: 0, transform: "scale(0.94)" }, { opacity: 1, transform: "none" }],
+                animateOwned(gained, [{ opacity: 0, transform: "scale(0.94)" }, { opacity: 1, transform: "none" }],
                     { duration: 260, easing: LL_EASE, pseudoElement: "::before" });
             }
         } catch (e) {}
     });
     llSel.obs.observe(root, { attributes: true, attributeFilter: ["class"], attributeOldValue: true, subtree: true });
-    requestAnimationFrame(function () { llRiseIn(llVisibleIn(root, ".recent-contact-item"), 26); });
+    if (animateEntry) requestAnimationFrame(function () { if (isThemeActive()) llRiseIn(llVisibleIn(root, ".recent-contact-item"), 26); });
 }
 
 /* ── 群成员 ── */
@@ -1187,6 +1202,7 @@ function llRecentSpeakers() {
 
 var llGM = { key: null, staff: {} };
 function llGroupMembersPass() {
+    if (!isThemeActive()) return;
     try {
         var gm = document.querySelector(".group-member");
         if (!gm) { llGM.key = null; return; }
@@ -1264,7 +1280,7 @@ function installSideListObserver() {
             if (t?.closest?.('.recent-contact, .two-col-layout__aside')) contactsDirty = true;
             if (t?.closest?.('.group-member')) membersDirty = true;
         }
-        if ((!contactsDirty && !membersDirty) || llSideRaf) return;
+        if (!isThemeActive() || (!contactsDirty && !membersDirty) || llSideRaf) return;
         // 合并到一帧：选人对话框等一次挂几千个节点时不会被触发成百上千次
         llSideRaf = requestAnimationFrame(function () {
             llSideRaf = 0;
@@ -1276,11 +1292,17 @@ function installSideListObserver() {
             } catch (e) {}
         });
     });
-    obs.observe(document.body, { childList: true, subtree: true });
+    if (isThemeActive()) obs.observe(document.body, { childList: true, subtree: true });
+    onThemeActivity(enabled => {
+        obs.disconnect(); cancelAnimationFrame(llSideRaf); llSideRaf = 0;
+        contactsDirty = membersDirty = false;
+        if (enabled) { obs.observe(document.body, { childList: true, subtree: true }); llWatchContactList(false); llGroupMembersPass(); }
+    });
     window.__liuliSideObs = obs;
 }
 
 function liuliMessagePass() {
+    if (!isThemeActive()) return;
     moveSenderIntoBubble();
     groupMessages();
     markQuoteRoots();
@@ -1316,7 +1338,7 @@ function llMotionPass(added) {
             // 换会话：消息区整体轻轻浮上来
             if (first && !LL_REDUCED) {
                 var area = document.querySelector(".chat-msg-area");
-                if (area && area.animate) area.animate([{ opacity: 0, transform: "translateY(10px)" }, { opacity: 1, transform: "none" }],
+                if (area && area.animate) animateOwned(area, [{ opacity: 0, transform: "translateY(10px)" }, { opacity: 1, transform: "none" }],
                     { duration: 280, easing: LL_EASE });
             }
             return;
@@ -1342,14 +1364,14 @@ function llMotionPass(added) {
             if (v > llMsgSeen.max) llMsgSeen.max = v;
             var self = mc.classList.contains("message-container--self") || !!mc.querySelector(".container--self");
             w.style.transformOrigin = self ? "100% 100%" : "0% 100%";
-            w.animate([
+            animateOwned(w, [
                 { opacity: 0, transform: "translateY(12px) scale(0.92)" },
                 { opacity: 1, transform: "translateY(-2px) scale(1.01)", offset: 0.7 },
                 { opacity: 1, transform: "none" }
             ], { duration: 360, easing: "cubic-bezier(0.22, 1, 0.36, 1)" });
             var av = mc.querySelector(":scope > .avatar-span");
             if (av && av.animate) {
-                av.animate([{ opacity: 0, transform: "scale(0.6)" }, { opacity: 1, transform: "none" }],
+                animateOwned(av, [{ opacity: 0, transform: "scale(0.6)" }, { opacity: 1, transform: "none" }],
                     { duration: 300, delay: 60, easing: "cubic-bezier(0.3, 1.35, 0.45, 1)", fill: "backwards" });
             }
         });
@@ -1360,10 +1382,10 @@ function installMessageObserver() {
     if (window.__liuliMsgObs) return;
     let frame = 0, full = true;
     const dirty = new Set();
-    function observe() { obs.observe(document.body, { childList: true, characterData: true, subtree: true }); }
+    function observe() { if (isThemeActive()) obs.observe(document.body, { childList: true, characterData: true, subtree: true }); }
     function flush() {
         frame = 0;
-        if (document.hidden || window.__liuliPause) return;
+        if (!isThemeActive() || window.__liuliPause) { dirty.clear(); full = true; return; }
         const area = document.querySelector('.chat-msg-area');
         if (!area) { dirty.clear(); return; }
         const scrolling = performance.now() - (window.__llScrollT || 0) < 120;
@@ -1390,6 +1412,7 @@ function installMessageObserver() {
         }
     }
     const obs = new MutationObserver(records => {
+        if (!isThemeActive()) { dirty.clear(); full = true; return; }
         let hit = false;
         for (const rec of records) {
             const target = rec.target.nodeType === 1 ? rec.target : rec.target.parentElement;
@@ -1408,11 +1431,15 @@ function installMessageObserver() {
                 if (area || full) node.querySelectorAll('.ml-item[id]').forEach(x => { dirty.add(x); hit = true; });
             }
         }
-        if (hit && !frame && !document.hidden) frame = requestAnimationFrame(flush);
+        if (hit && !frame && isThemeActive()) frame = requestAnimationFrame(flush);
     });
     observe(); window.__liuliMsgObs = obs;
-    frame = requestAnimationFrame(flush);
-    document.addEventListener('visibilitychange', () => { if (!document.hidden && !frame) { full = true; frame = requestAnimationFrame(flush); } });
+    if (isThemeActive()) frame = requestAnimationFrame(flush);
+    onThemeActivity(enabled => {
+        obs.disconnect(); cancelAnimationFrame(frame); frame = 0; dirty.clear(); full = true;
+        llMotionPending.clear();
+        if (enabled) { observe(); frame = requestAnimationFrame(flush); }
+    });
     window.addEventListener('pagehide', () => { cancelAnimationFrame(frame); obs.disconnect(); dirty.clear(); }, { once: true });
 }
 
@@ -1830,6 +1857,7 @@ try {
 try {
     window.addEventListener("storage", function (e) {
         if (e.key !== LL_WALLPAPER_KEY) return;
+        if (!isThemeActive()) { llDeferredWallpaper = true; llDeferredPalette = true; return; }
         const st = loadWallpaperState();
         auditWallpaper("storage", {
             scope: llScopeName(), key: LL_WALLPAPER_KEY, hasSrc: !!(st && st.src)
@@ -1858,7 +1886,7 @@ try {
  * 大图 dataURL 只在真正需要时才解析。 */
 let llWpRevSeen = "";
 try { llWpRevSeen = localStorage.getItem(LL_WALLPAPER_REV_KEY) || ""; } catch (e) {}
-setInterval(function () {
+activeInterval(function () {
     try {
         if (!document.body || document.body.dataset.liuliScope !== "main") return;
         const rev = localStorage.getItem(LL_WALLPAPER_REV_KEY) || "";
@@ -2017,6 +2045,7 @@ function llMainViewportRatio() {
 (function publishMainViewport() {
     let t = 0;
     function pub() {
+        if (!isThemeActive()) return;
         if (!document.body || document.body.dataset.liuliScope !== "main") return;
         try {
             const cur = JSON.parse(localStorage.getItem(LL_MAIN_VP_KEY) || "null");
@@ -2027,7 +2056,7 @@ function llMainViewportRatio() {
     try {
         window.addEventListener("resize", function () { clearTimeout(t); t = setTimeout(pub, 80); });
         setTimeout(pub, 500);
-        setInterval(pub, 3000);
+        activeInterval(pub, 3000);
         window.addEventListener("storage", function (e) {
             if (e.key === LL_MAIN_VP_KEY && typeof refreshWallpaperPreview === "function") refreshWallpaperPreview();
         });
@@ -2411,6 +2440,7 @@ function llApplyMode(withTransition, x, y) {
 }
 try {
     window.addEventListener("storage", function (e) {
+        if (!isThemeActive()) { if (e.key === ROLE_KEY || e.key === LL_MODE_KEY) llDeferredPalette = true; return; }
         if (e.key === LL_MODE_KEY) { llApplyMode(false); if (typeof llModeRefresh === "function") llModeRefresh(); }
         // 配色（颜色角色）在别的窗口改了：重新派生一次色板
         if (e.key === ROLE_KEY) { window.__liuliPaletteApplied = false; applyDynamicPalette(); }
@@ -2419,6 +2449,7 @@ try {
 let llModeRefresh = null;
 try {
     new MutationObserver(function () {
+        if (!isThemeActive()) return;
         if (llThemeMode() !== "auto") return;
         const d = llIsDark() ? "1" : "0";
         if (document.body.dataset.liuliDark !== d) llApplyMode(false);
@@ -2693,9 +2724,10 @@ function buildDiagSection(host) {
         if (errList.classList.contains("is-open")) renderErrorList();
     };
     refreshErrors();
-    const errorTimer = setInterval(() => {
-        if (!block.isConnected) { clearInterval(errorTimer); return; }
-        if (!document.hidden) refreshErrors();
+    let stopErrors = () => {};
+    stopErrors = activeInterval(() => {
+        if (!block.isConnected) { stopErrors(); return; }
+        refreshErrors();
     }, 3000);
 
     errToggle.addEventListener("click", function () {
@@ -2836,9 +2868,10 @@ function buildPanelContent(host, settings) {
         infoText.textContent = "壁纸取色 " + src + " → 品牌 " + brand;
     };
     refreshInfo();
-    const infoTimer = setInterval(() => {
-        if (!host.isConnected) { clearInterval(infoTimer); return; }
-        if (!document.hidden) refreshInfo();
+    let stopInfo = () => {};
+    stopInfo = activeInterval(() => {
+        if (!host.isConnected) { stopInfo(); return; }
+        refreshInfo();
     }, 10000);
 
     const group = document.createElement("div");
@@ -2864,6 +2897,7 @@ function buildPanelContent(host, settings) {
         const slider = document.createElement("input");
         slider.type = "range";
         slider.className = "liuli-slider";
+        slider.dataset.liuliMaterial = f.key;
         slider.min = f.min;
         slider.max = f.max;
         slider.step = f.step;
@@ -2988,6 +3022,7 @@ async function initPanel() {
         try { await initPanel(); } catch (e) { console.warn("[liuli-dsh-theme] panel failed:", e && e.message); }
         console.log("[liuli-dsh-theme] ready in " + (Date.now() - started) + "ms");
         markBootReady();
+        refreshSurfaceState();
     } catch (error) {
         const reason = (error && error.message) || String(error || "未知异常");
         console.error("[liuli-dsh-theme] inject failed:", reason);
@@ -3053,6 +3088,7 @@ function llInlineMarkdown(md) {
 }
 
 function llMarkdownPass(root = document) {
+    if (!isThemeActive()) return;
     // 性能：滚动时这里会被频繁调用。只读 textContent（不触发排版），
     // 判过的元素在节点上记一个属性，文本没变就直接跳过。
     try {
@@ -3132,7 +3168,7 @@ function installMarkdownObserver() {
     if (window.__llMdObserver) return;
     window.__llMdObserver = true;
     // Message observer owns the only message scan and animation pass.
-    window.addEventListener('storage', e => { if (e.key === LL_MD_KEY) llMarkdownPass(); });
+    window.addEventListener('storage', e => { if (e.key === LL_MD_KEY && isThemeActive()) llMarkdownPass(); });
     llMarkdownPass(); llAtPass();
 }
 
@@ -3190,6 +3226,7 @@ function llLoadSelfUid() {
 }
 
 function llAtPass(root = document) {
+    if (!isThemeActive()) return;
     try {
         if (!llSelfUid) { llLoadSelfUid(); return; }
         const ats = root.querySelectorAll(".ml-item .text-element--at");
@@ -3247,7 +3284,7 @@ function llApplyFont() {
     b.style.setProperty("--ll-font", '"' + name + '", "MiSans", "Microsoft YaHei UI", system-ui, sans-serif, "Segoe UI Emoji"');
     b.dataset.llFont = "1";
 }
-window.addEventListener("storage", e => { if (e.key === LL_FONT_KEY) llApplyFont(); });
+window.addEventListener("storage", e => { if (e.key === LL_FONT_KEY && isThemeActive()) llApplyFont(); });
 
 let llFontCtx = null;
 function llFontInstalled(name) {
@@ -3331,11 +3368,11 @@ function installMaintenanceScheduler() {
     const colorRoots = new Set();
     const schedule = () => {
         dirty = true;
-        if (!timer && !document.hidden) timer = setTimeout(run, 180);
+        if (!timer && isThemeActive()) timer = setTimeout(run, 180);
     };
     function run() {
         timer = 0;
-        if (!dirty || document.hidden || window.__liuliPause) return;
+        if (!dirty || !isThemeActive() || window.__liuliPause) return;
         if (performance.now() - (window.__llScrollT || 0) < 150) { timer = setTimeout(run, 180); return; }
         dirty = false; observer.disconnect();
         try {
@@ -3361,10 +3398,38 @@ function installMaintenanceScheduler() {
         }
         if (changed) schedule();
     });
-    function observe() { observer.observe(document.body, { childList: true, subtree: true }); }
+    function observe() { if (isThemeActive()) observer.observe(document.body, { childList: true, subtree: true }); }
     observe(); schedule();
     window.addEventListener('hashchange', schedule);
     window.addEventListener('popstate', schedule);
-    document.addEventListener('visibilitychange', () => { if (!document.hidden) { llScheduleColorWork(); schedule(); } });
+    onThemeActivity(enabled => {
+        observer.disconnect(); clearTimeout(timer); timer = 0; colorRoots.clear(); dirty = true;
+        if (enabled) { observe(); llScheduleColorWork(); schedule(); }
+    });
     window.addEventListener('pagehide', () => { clearTimeout(timer); observer.disconnect(); }, { once: true });
 }
+
+// Suspend owned work without retaining detached virtual-list nodes in background.
+onThemeActivity(enabled => {
+    if (enabled) {
+        if (llDeferredSettings) {
+            try { const raw = localStorage.getItem(LL_STORAGE_KEY); if (raw) applySettings(llNormalizeSettings(JSON.parse(raw)), false); } catch {}
+            llDeferredSettings = false;
+        }
+        if (llDeferredWallpaper) { renderWallpaper(loadWallpaperState(), 'resume'); llDeferredWallpaper = false; }
+        if (llDeferredPalette) { window.__liuliPaletteApplied = false; applyDynamicPalette(); llDeferredPalette = false; }
+        normalizeColors(document.body); llApplyFont(); llApplyMode(false); scheduleStick();
+        return;
+    }
+    for (const animation of llOwnedAnimations) animation.cancel();
+    llOwnedAnimations.clear();
+    cancelAnimationFrame(liuliStickRaf); liuliStickRaf = 0;
+    if (llColorHandle) {
+        if (llColorUsesIdle) cancelIdleCallback(llColorHandle); else clearTimeout(llColorHandle);
+    }
+    llColorHandle = 0; llColorScheduled = false; llColorJobs.length = 0; llColorRoots = new WeakSet();
+    llImageRatioCache.clear(); llMotionPending.clear();
+    llMsgSeen.chat = null; llMsgSeen.max = null;
+    llSel.obs?.disconnect(); llSel.obs = null; llSel.root = null; llSel.id = null;
+    llGM.key = null; llGM.staff = {};
+});

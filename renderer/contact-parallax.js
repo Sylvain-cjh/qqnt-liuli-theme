@@ -1,4 +1,5 @@
 import { loadEffects, subscribeEffects } from './effect-settings.js';
+import { isThemeActive, onThemeActivity } from './activity.js';
 // Pointer coordinates use the resting row bounds, never the transformed bounds.
 export function installContactParallax() {
     const selector = '.recent-contact .recent-contact-item:not([data-liuli-projection])';
@@ -12,6 +13,7 @@ export function installContactParallax() {
     let active = null, frame = 0;
     const returning = new Map();
     const cards = new Map();
+    const dirtyCards = new Set();
     const keyOf = row => row.getAttribute('data-contact-id') || row;
     function transition(state, phase) {
         state.phase = phase;
@@ -29,9 +31,9 @@ export function installContactParallax() {
         releaseStyles(state);
         state.row = row;
         own(state, row, 'opacity', '0');
-        state.observer.disconnect();
-        state.observer.observe(row.parentElement, { childList: true, subtree: true, characterData: true,
-            attributes: true, attributeFilter: ['class', 'data-contact-id'] });
+        const bounds = row.getBoundingClientRect(); bounds.y -= offsets.get(row) || 0;
+        state.bounds = bounds; state.overlay.style.left = `${bounds.left}px`;
+        dirtyCards.add(state);
         return true;
     }
     function syncProjection(state, animate = false) {
@@ -41,6 +43,7 @@ export function installContactParallax() {
             return;
         }
         const selected = state.row.classList.contains('recent-contact-item--selected');
+        state.pinned = state.row.classList.contains('recent-contact-item--top');
         const visual = state.row.cloneNode(true);
         visual.setAttribute('data-liuli-projection', '');
         visual.removeAttribute('id');
@@ -79,6 +82,8 @@ export function installContactParallax() {
                 priority: node.style.getPropertyPriority(property), written: '' };
             state.styles.push(record);
         }
+        if (record.input === value) return;
+        record.input = value;
         node.style.setProperty(property, value, 'important');
         // CSSOM normalizes decimals and shorthand syntax. Compare its serialized
         // value during cleanup, rather than the unnormalized input string.
@@ -98,13 +103,14 @@ export function installContactParallax() {
         returning.delete(state);
         state.phase = 'disposed';
         if (cards.get(state.key) === state) cards.delete(state.key);
-        state.observer.disconnect();
+        dirtyCards.delete(state);
         state.selectionAnimation?.cancel();
         state.exitAnimation?.cancel();
         releaseStyles(state);
         state.overlay?.remove();
     }
     function wake() {
+        if (!isThemeActive()) return;
         if (!frame) { lastFrame = performance.now(); frame = requestAnimationFrame(draw); }
     }
     function reset(immediate = false) {
@@ -130,16 +136,11 @@ export function installContactParallax() {
             progress: 0, eased: 0, goal: 1, rx: 0, ry: 0, renderTop: bounds.top, pinUntil: 0,
             styles: [], x: 0, y: 0, contactId: row.getAttribute('data-contact-id'),
             selected: row.classList.contains('recent-contact-item--selected'),
-            selectionOrigin: row.parentElement.querySelector('.recent-contact-item--selected')?.getBoundingClientRect(),
-            observer: new MutationObserver(records => {
-                if (!retainRow(state)) { restore(state); if (active === state) active = null; return; }
-                if (records.some(r => r.target === state.row || state.row.contains(r.target))) syncProjection(state, true);
-            }) };
+            pinned: row.classList.contains('recent-contact-item--top'),
+            selectionOrigin: row.parentElement.querySelector('.recent-contact-item--selected')?.getBoundingClientRect() };
         active = state;
         state.key = keyOf(row); cards.set(state.key, state); transition(state, 'entering');
-        // Virtual-list recycling must not carry the previous contact's tilt forward.
-        state.observer.observe(row.parentElement, { childList: true, subtree: true, characterData: true,
-            attributes: true, attributeFilter: ['class', 'data-contact-id'] });
+        // One shared list observer handles all projected cards.
         row.setAttribute('data-liuli-depth', 'active');
         const overlay = document.createElement('div');
         overlay.className = 'recent-contact liuli-contact-projection';
@@ -159,6 +160,13 @@ export function installContactParallax() {
     }
     function draw(now) {
         frame = 0;
+        if (!isThemeActive()) { clearForScroll(); return; }
+        for (const state of dirtyCards) {
+            if (state.phase === 'disposed') continue;
+            if (!retainRow(state)) { restore(state); if (active === state) active = null; }
+            else syncProjection(state, true);
+        }
+        dirtyCards.clear();
         const dt = Math.min(40, Math.max(0, now - lastFrame)); lastFrame = now;
         const states = [...cards.values()];
         let moving = false;
@@ -180,16 +188,13 @@ export function installContactParallax() {
             releaseStyles(layout); offsets.clear(); spacing.clear(); return;
         }
         layoutRoot = root;
-        const positions = [...root.querySelectorAll(selector)].map(row => {
-            const rect = row.getBoundingClientRect();
-            return { row, restingTop: rect.top - (offsets.get(row) || 0) };
-        });
-        for (const { row, restingTop } of positions) {
+        const rows = [...root.querySelectorAll(selector)].filter(row => !row.closest('.viewport-list__measure'));
+        for (const row of rows) {
             let above = 0, below = 0;
             for (const state of live) {
                 if (row === state.row) continue;
                 const extra = options.spacing ? (state.bounds.height * expansion + 4) * state.eased : 0;
-                if (restingTop < state.bounds.top) above = options.shareSpace ? Math.max(above, extra) : above + extra;
+                if (row.compareDocumentPosition(state.row) & Node.DOCUMENT_POSITION_FOLLOWING) above = options.shareSpace ? Math.max(above, extra) : above + extra;
                 else below = options.shareSpace ? Math.max(below, extra) : below + extra;
             }
             const target = below - above;
@@ -218,7 +223,8 @@ export function installContactParallax() {
         else if (!live.length) { releaseStyles(layout); offsets.clear(); spacing.clear(); layoutRoot = null; }
     }
     function move(event) {
-        if (!options.enabled) return;
+        if (!options.enabled || !isThemeActive()) return;
+        if (!observedList?.isConnected) observeList();
         if (event.buttons && active) return;
         if (event.pointerType === 'touch' || !fine.matches || event.buttons ||
             document.body?.dataset.liuliScope !== 'main') { reset(); return; }
@@ -271,6 +277,7 @@ export function installContactParallax() {
         for (const state of [...returning.keys()]) restore(state);
         cancelAnimationFrame(frame); frame = 0;
         releaseStyles(layout); offsets.clear(); spacing.clear(); layoutRoot = null;
+        dirtyCards.clear();
     }
     // Clear before wheel scrolling changes native virtual-list geometry. Scroll
     // also covers scrollbar dragging, keyboard navigation and programmatic moves.
@@ -312,6 +319,23 @@ export function installContactParallax() {
         selectedSnapshot = { key, top: rect.top - residual };
     };
     const reorderObserver = new MutationObserver(records => {
+        if (!isThemeActive()) return;
+        records = records.filter(record => {
+            const target = record.target.nodeType === 1 ? record.target : record.target.parentElement;
+            return target?.closest('.recent-contact:not(.liuli-contact-projection)') && !target.closest('.liuli-contact-projection');
+        });
+        for (const record of records) {
+            const target = record.target.nodeType === 1 ? record.target : record.target.parentElement;
+            const row = target?.closest(selector);
+            const state = row && cards.get(keyOf(row));
+            if (state && (record.type !== 'attributes' || target !== row ||
+                row.classList.contains('recent-contact-item--selected') !== state.selected ||
+                row.classList.contains('recent-contact-item--top') !== state.pinned)) dirtyCards.add(state);
+            if (record.attributeName === 'data-contact-id') {
+                for (const card of cards.values()) if (card.row === target && card.contactId !== target.getAttribute('data-contact-id')) dirtyCards.add(card);
+            }
+        }
+        if (dirtyCards.size || [...cards.values()].some(state => !state.row.isConnected)) wake();
         const structural = records.some(record => record.type === 'childList' &&
             record.target instanceof Element && record.target.matches('.viewport-list__inner') &&
             record.target.closest('.recent-contact:not(.liuli-contact-projection)'));
@@ -329,9 +353,8 @@ export function installContactParallax() {
                 return false;
             });
             for (const row of offsets.keys()) if (!row.isConnected) { offsets.delete(row); spacing.delete(row); }
-            for (const state of [...returning.keys(), ...(active ? [active] : [])]) {
-                if (!retainRow(state)) continue;
-                const rect = state.row.getBoundingClientRect();
+            const positions = [...cards.values()].filter(retainRow).map(state => ({ state, rect: state.row.getBoundingClientRect() }));
+            for (const { state, rect } of positions) {
                 rect.y -= offsets.get(state.row) || 0;
                 state.bounds = rect;
                 state.overlay.style.left = `${rect.left}px`;
@@ -340,8 +363,29 @@ export function installContactParallax() {
         }
         if (!reorderFrame) reorderFrame = requestAnimationFrame(sampleSelected);
     });
-    reorderObserver.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['class'] });
-    sampleSelected();
+    let observedList = null;
+    function observeList() {
+        if (!isThemeActive()) return;
+        const root = document.querySelector('.recent-contact:not(.liuli-contact-projection)');
+        if (root === observedList) return;
+        reorderObserver.disconnect(); observedList = root;
+        reorderAnimation?.cancel(); reorderAnimation = null; selectedSnapshot = null;
+        if (root) reorderObserver.observe(root, { childList: true, characterData: true, subtree: true, attributes: true, attributeFilter: ['class', 'data-contact-id'] });
+        for (const card of cards.values()) dirtyCards.add(card);
+        if (cards.size) wake();
+    }
+    const rootObserver = new MutationObserver(() => {
+        if (document.body.dataset.liuliScope === 'main' && !observedList?.isConnected) observeList();
+    });
+    observeList();
+    if (isThemeActive()) rootObserver.observe(document.body, { childList: true, subtree: true });
+    if (isThemeActive()) sampleSelected();
+    const unsubscribeActivity = onThemeActivity(enabled => {
+        clearForScroll(); reorderObserver.disconnect(); rootObserver.disconnect(); observedList = null;
+        cancelAnimationFrame(reorderFrame); reorderFrame = 0;
+        reorderAnimation?.cancel(); reorderAnimation = null; selectedSnapshot = null;
+        if (enabled) { observeList(); rootObserver.observe(document.body, { childList: true, subtree: true }); sampleSelected(); }
+    });
     listen(document, 'scroll', event => {
         if (!isListScroll(event)) return;
         scrollAt = performance.now(); reorderAnimation?.cancel(); reorderAnimation = null;
@@ -349,8 +393,10 @@ export function installContactParallax() {
     }, { capture: true, passive: true });
     function dispose() {
         unsubscribeEffects();
+        unsubscribeActivity();
         clearForScroll();
-        reorderObserver.disconnect(); cancelAnimationFrame(reorderFrame); reorderAnimation?.cancel();
+        reorderObserver.disconnect(); rootObserver.disconnect(); observedList = null;
+        cancelAnimationFrame(reorderFrame); reorderAnimation?.cancel();
         for (const remove of listeners) remove();
     }
     listen(window, 'pagehide', dispose, { once: true });

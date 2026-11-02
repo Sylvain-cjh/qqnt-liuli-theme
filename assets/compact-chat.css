@@ -143,6 +143,13 @@ body[data-liuli-scope="main"] .message-container > .avatar-span {
   will-change: auto !important;
 }
 
+/* Hidden windows release theme-owned decorative surfaces; QQ data is untouched. */
+body[data-liuli-idle] #app::before { display: none !important; }
+body[data-liuli-idle] :is(.recent-contact, .group-box) {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  box-shadow: none !important;
+}
 /* A native window-drag hit area with the same pill language as the top hints. */
 #liuli-window-drag {
   display: none;

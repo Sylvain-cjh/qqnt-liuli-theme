@@ -3,11 +3,14 @@ function showStatus(block, info) {
     if (status) status.textContent = `已安装 ${info.installedVersion || '未知'} · 已载入 ${info.loadedVersion || '未知'} · ${info.enabled && info.watching ? '正在监听文件变化' : '自动更新已关闭或监听不可用'}${info.error ? ' · ' + info.error : ''}`;
     for (const button of block.querySelectorAll('[data-hot-enabled]')) button.classList.toggle('is-active', info.enabled === (button.dataset.hotEnabled === 'true'));
 }
+import { isThemeActive, onThemeActivity } from './activity.js';
 export function installThemeUpdates(files, style) {
     const chunks = new Map();
     const api = window.liuli_api;
     let ready = false;
     const pending = [];
+    let needsApply = false;
+    const apply = () => { if (ready && needsApply && isThemeActive()) { style().textContent = files.map(name => chunks.get(name) || '').join('\n'); needsApply = false; } };
     function update(event) {
         if (event.type === 'status') {
             for (const block of document.querySelectorAll('.liuli-hot-update')) showStatus(block, event);
@@ -16,10 +19,11 @@ export function installThemeUpdates(files, style) {
         if (event.type !== 'css') return;
         if (!ready) { pending.push(event); return; }
         for (const item of event.css || []) if (files.includes(item.name)) chunks.set(item.name, item.text);
-        style().textContent = files.map(name => chunks.get(name) || '').join('\n');
+        needsApply = true; apply();
     }
     const unsubscribe = api?.onThemeUpdate?.(update);
-    window.addEventListener('pagehide', () => { unsubscribe?.(); pending.length = 0; chunks.clear(); }, { once: true });
+    const unsubscribeActivity = onThemeActivity(enabled => { if (enabled) apply(); });
+    window.addEventListener('pagehide', () => { unsubscribe?.(); unsubscribeActivity(); pending.length = 0; chunks.clear(); }, { once: true });
     return entries => {
         for (const [name, text] of entries) chunks.set(name, text);
         ready = true;
@@ -53,7 +57,7 @@ export function buildHotUpdateSettings(host) {
         memory.disabled = true;
         try {
             const snapshot = await api.themeMemory();
-            output.textContent = snapshot.processes.sort((a,b) => b.workingSetMB-a.workingSetMB).map(item =>
+            output.textContent = `硬件加速：${snapshot.hardwareAcceleration ? '已启用' : '未启用'}（不代表 JavaScript 在 GPU 执行）\n` + snapshot.processes.sort((a,b) => b.workingSetMB-a.workingSetMB).map(item =>
                 `PID ${item.pid}${item.pid === snapshot.currentRendererPid ? '（当前窗口）' : ''} · ${item.type} · 工作集 ${item.workingSetMB}MB · 私有 ${item.privateMB ?? '—'}MB`).join('\n') + '\n进程包含 QQ 与同进程插件，不能据此分摊单个插件占用。';
         } catch (reason) { error(reason); }
         finally { memory.disabled = false; }
