@@ -1488,6 +1488,13 @@ function installRevealTracker() {
 function ensureHoverEntries() {
     try {
         installRevealTracker();
+        if (!document.getElementById("liuli-window-drag")) {
+            const drag = document.createElement("div");
+            drag.id = "liuli-window-drag";
+            drag.title = "按住拖动窗口";
+            drag.setAttribute("aria-hidden", "true");
+            document.body.appendChild(drag);
+        }
         [["liuli-top-hint-l", "唤出个人信息"], ["liuli-top-hint-r", "唤出窗口按钮"]].forEach(function (pair) {
             if (document.getElementById(pair[0])) return;
             var el = document.createElement("div");

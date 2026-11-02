@@ -143,6 +143,35 @@ body[data-liuli-scope="main"] .message-container > .avatar-span {
   will-change: auto !important;
 }
 
+/* A native window-drag hit area with the same pill language as the top hints. */
+#liuli-window-drag {
+  display: none;
+}
+body[data-liuli-scope="main"] #liuli-window-drag {
+  display: block;
+  position: fixed;
+  top: 0;
+  left: 50%;
+  width: clamp(56px, 12vw, 120px);
+  height: 20px;
+  transform: translateX(-50%);
+  z-index: 3750;
+  -webkit-app-region: drag !important;
+  user-select: none;
+}
+body[data-liuli-scope="main"] #liuli-window-drag::before {
+  content: "";
+  position: absolute;
+  top: 6px;
+  left: 50%;
+  width: 56px;
+  height: 4px;
+  transform: translateX(-50%);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--ll-on-glass) 58%, transparent);
+  box-shadow: 0 1px 4px rgba(var(--ll-shadow-rgb), .22), inset 0 1px 0 rgba(255,255,255,.12);
+  pointer-events: none;
+}
 /* Native rows can carry 100% width: adding margins otherwise clips the right. */
 body[data-liuli-scope="main"] .recent-contact:not(.liuli-contact-projection) .recent-contact-item:not([data-liuli-projection]) {
   box-sizing: border-box !important;
