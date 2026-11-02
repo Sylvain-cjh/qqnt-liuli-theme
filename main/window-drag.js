@@ -3,10 +3,16 @@ module.exports = function installWindowDrag() {
     const sessions = new Map();
     const getWindow = event => !event.sender.isDestroyed() && event.senderFrame === event.sender.mainFrame
         ? BrowserWindow.fromWebContents(event.sender) : null;
-    ipcMain.handle('LiteLoader.liuli.dragStart', event => {
+    ipcMain.handle('LiteLoader.liuli.dragStart', (event, point) => {
         const window = getWindow(event);
         if (!window || window.isDestroyed() || window.isFullScreen()) return false;
-        sessions.set(event.sender.id, { window, cursor: screen.getCursorScreenPoint(), bounds: window.getBounds() });
+        const cursor = point && Number.isFinite(point.x) && Number.isFinite(point.y) && Math.abs(point.x) < 50000 && Math.abs(point.y) < 50000
+            ? { x: Math.round(point.x), y: Math.round(point.y) } : screen.getCursorScreenPoint();
+        const previous = sessions.get(event.sender.id);
+        if (previous) previous.contents.removeListener('destroyed', previous.cleanup);
+        const id = event.sender.id, cleanup = () => sessions.delete(id);
+        sessions.set(id, { window, cursor, bounds: window.getBounds(), contents: event.sender, cleanup });
+        event.sender.once('destroyed', cleanup);
         return true;
     });
     const move = event => {
@@ -26,13 +32,18 @@ module.exports = function installWindowDrag() {
         const current = session.window.getPosition();
         if (current[0] !== x || current[1] !== y) session.window.setPosition(x, y);
     };
-    const stop = event => sessions.delete(event.sender.id);
+    const stop = event => {
+        const session = sessions.get(event.sender.id);
+        if (session) session.contents.removeListener('destroyed', session.cleanup);
+        sessions.delete(event.sender.id);
+    };
     ipcMain.on('LiteLoader.liuli.dragMove', move);
     ipcMain.on('LiteLoader.liuli.dragStop', stop);
     return () => {
         ipcMain.removeHandler('LiteLoader.liuli.dragStart');
         ipcMain.removeListener('LiteLoader.liuli.dragMove', move);
         ipcMain.removeListener('LiteLoader.liuli.dragStop', stop);
+        for (const session of sessions.values()) session.contents.removeListener('destroyed', session.cleanup);
         sessions.clear();
     };
 };

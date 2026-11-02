@@ -9,6 +9,8 @@ import { installLayout, applyBar, nativeBarItem, applyAll as llLayoutPass, build
 import { installArkExternal } from "./ark-external.js";
 import { installContactParallax } from "./contact-parallax.js";
 import { installDragHandle } from "./window-drag.js";
+import { buildEffectSettings } from "./effect-settings.js";
+import { installThemeUpdates, buildHotUpdateSettings } from "./hot-update.js";
 import { ROLE_KEY, loadRoles, roleVars, accentPalette, buildRoleControls } from "./color-roles.js";
 // 诊断运行时（契约 installer/DIAG-COVERAGE.md 第三、3.2、3.3、3.5 节）：
 // 尽早安装，后面整个模块体里任何 console.error / 未捕获异常 / Promise 拒绝
@@ -29,6 +31,7 @@ document.addEventListener('keydown', event => {
 const ASSET_BASE = "local://profile/plugins/" + SLUG + "/assets/";
 const FILES = ["wallpaper.css", "qq-tokens.css", "palette.css", "liuli.css", "typography.css", "panel.css", "settings-page.css", "details.css", "no-dividers.css", "input-bar.css", "bubbles.css", "layout.css", "lists.css", "motion.css", "markdown.css", "layout-custom.css", "compact-chat.css"];
 const STYLE_ID = "liuli-dsh-theme";
+const seedThemeStyles = installThemeUpdates(FILES, ensureStyle);
 const WALLPAPER = ASSET_BASE + "wallpaper.jpg";
 // 默认壁纸不随插件发布：assets/wallpaper.css（内联壁纸）和 assets/wallpaper.jpg（取色用）
 // 都是可选的本地文件。没有时没有默认壁纸，取色回退 DEFAULT_SOURCE，在设置页选图即可。
@@ -326,6 +329,10 @@ const llColorJobs = [];
 let llColorScheduled = false;
 function llQueueColorRoot(root) {
     if (!root || root.nodeType !== 1 || llColorRoots.has(root)) return;
+    if (llColorJobs.length >= 96) {
+        llColorJobs.length = 0;
+        root = document.body;
+    }
     llColorRoots.add(root);
     llColorJobs.push({ node: root, walker: document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT) });
     llScheduleColorWork();
@@ -340,6 +347,7 @@ function llScheduleColorWork() {
         let processed = 0;
         while (llColorJobs.length && processed < 180 && performance.now() - start < 4) {
             const job = llColorJobs[0], el = job.node;
+            if (!job.walker.root.isConnected) { llColorJobs.shift(); continue; }
             if (!el) { llColorJobs.shift(); continue; }
             job.node = job.walker.nextNode(); processed++;
             if (!el.isConnected || llColorSeen.has(el)) continue;
@@ -404,7 +412,7 @@ function applyOverrides() {
 }
 
 async function loadText(name) {
-    const response = await fetch(ASSET_BASE + name);
+    const response = await fetch(ASSET_BASE + name, { cache: 'no-store' });
     if (!response.ok) throw new Error(name + " HTTP " + response.status);
     return await response.text();
 }
@@ -1670,7 +1678,11 @@ function primeImageRatio(src) {
         img.onload = function () {
             const r = img.naturalWidth > 0 && img.naturalHeight > 0
                 ? img.naturalWidth / img.naturalHeight : null;
-            if (r) llImageRatioCache.set(src, r);
+            if (r) {
+                const limit = src.startsWith('data:') ? 2 : 16;
+                while (llImageRatioCache.size >= limit) llImageRatioCache.delete(llImageRatioCache.keys().next().value);
+                llImageRatioCache.set(src, r);
+            }
             resolve(r);
         };
         img.onerror = function () { resolve(null); };
@@ -2681,7 +2693,10 @@ function buildDiagSection(host) {
         if (errList.classList.contains("is-open")) renderErrorList();
     };
     refreshErrors();
-    setInterval(refreshErrors, 3000);
+    const errorTimer = setInterval(() => {
+        if (!block.isConnected) { clearInterval(errorTimer); return; }
+        if (!document.hidden) refreshErrors();
+    }, 3000);
 
     errToggle.addEventListener("click", function () {
         const open = errList.classList.toggle("is-open");
@@ -2886,6 +2901,8 @@ function buildPanelContent(host, settings) {
     buildRoleControls(host, function () { window.__liuliPaletteApplied = false; applyDynamicPalette(); });
     buildWallpaperControls(host);
     buildLayoutSection(host);
+    buildEffectSettings(host);
+    buildHotUpdateSettings(host);
     buildDiagSection(host);   // 契约 3.5：诊断小节放在「恢复默认」之前
 
     const reset = document.createElement("div");
@@ -2932,13 +2949,12 @@ async function initPanel() {
     const started = Date.now();
     installRouteScope();
     try {
-        const chunks = [];
-        for (const file of FILES) {
-            // wallpaper.css 是可选的本地默认壁纸（不随仓库发布），没有就跳过
-            try { chunks.push(await loadText(file)); }
-            catch (e) { if (!OPTIONAL_FILES.has(file)) throw e; }
-        }
-        ensureStyle().textContent = chunks.join("\n");
+        const chunks = await Promise.all(FILES.map(async file => {
+            try { return [file, await loadText(file)]; }
+            catch (error) { if (!OPTIONAL_FILES.has(file)) throw error; return [file, '']; }
+        }));
+        ensureStyle().textContent = chunks.map(([, text]) => text).join("\n");
+        seedThemeStyles(chunks);
         document.body.dataset.liuliTheme = "dsh";
         llApplyFont();
 
@@ -3338,7 +3354,10 @@ function installMaintenanceScheduler() {
             if (target?.closest('.recent-contact, .group-member')) continue;
             if ([...record.addedNodes, ...record.removedNodes].length && [...record.addedNodes, ...record.removedNodes].every(n => n.nodeType === 1 && n.matches('.liuli-contact-projection'))) continue;
             changed = true;
-            for (const node of record.addedNodes) if (node.nodeType === 1) colorRoots.add(node);
+            for (const node of record.addedNodes) if (node.nodeType === 1 && !colorRoots.has(document.body)) {
+                if (colorRoots.size >= 96) { colorRoots.clear(); colorRoots.add(document.body); }
+                else colorRoots.add(node);
+            }
         }
         if (changed) schedule();
     });

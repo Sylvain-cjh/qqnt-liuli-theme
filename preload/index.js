@@ -3,7 +3,16 @@
 const { contextBridge, ipcRenderer } = require("electron");
 
 const api = {
-    startWindowDrag: () => ipcRenderer.invoke('LiteLoader.liuli.dragStart'),
+    themeInfo: () => ipcRenderer.invoke('LiteLoader.liuli.themeInfo'),
+    themeMemory: () => ipcRenderer.invoke('LiteLoader.liuli.themeMemory'),
+    themeReload: () => ipcRenderer.invoke('LiteLoader.liuli.themeReload'),
+    themeAuto: enabled => ipcRenderer.invoke('LiteLoader.liuli.themeAuto', enabled),
+    onThemeUpdate: callback => {
+        const listener = (_event, update) => callback(update);
+        ipcRenderer.on('LiteLoader.liuli.themeUpdate', listener);
+        return () => ipcRenderer.removeListener('LiteLoader.liuli.themeUpdate', listener);
+    },
+    startWindowDrag: (x, y) => ipcRenderer.invoke('LiteLoader.liuli.dragStart', { x, y }),
     moveWindowDrag: () => ipcRenderer.send('LiteLoader.liuli.dragMove'),
     stopWindowDrag: () => ipcRenderer.send('LiteLoader.liuli.dragStop'),
     openDevTools: async () => {

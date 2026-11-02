@@ -1,0 +1,62 @@
+function showStatus(block, info) {
+    const status = block.querySelector('[data-hot-status]');
+    if (status) status.textContent = `已安装 ${info.installedVersion || '未知'} · 已载入 ${info.loadedVersion || '未知'} · ${info.enabled && info.watching ? '正在监听文件变化' : '自动更新已关闭或监听不可用'}${info.error ? ' · ' + info.error : ''}`;
+    for (const button of block.querySelectorAll('[data-hot-enabled]')) button.classList.toggle('is-active', info.enabled === (button.dataset.hotEnabled === 'true'));
+}
+export function installThemeUpdates(files, style) {
+    const chunks = new Map();
+    const api = window.liuli_api;
+    let ready = false;
+    const pending = [];
+    function update(event) {
+        if (event.type === 'status') {
+            for (const block of document.querySelectorAll('.liuli-hot-update')) showStatus(block, event);
+            return;
+        }
+        if (event.type !== 'css') return;
+        if (!ready) { pending.push(event); return; }
+        for (const item of event.css || []) if (files.includes(item.name)) chunks.set(item.name, item.text);
+        style().textContent = files.map(name => chunks.get(name) || '').join('\n');
+    }
+    const unsubscribe = api?.onThemeUpdate?.(update);
+    window.addEventListener('pagehide', () => { unsubscribe?.(); pending.length = 0; chunks.clear(); }, { once: true });
+    return entries => {
+        for (const [name, text] of entries) chunks.set(name, text);
+        ready = true;
+        for (const event of pending.splice(0)) update(event);
+    };
+}
+export function buildHotUpdateSettings(host) {
+    const block = document.createElement('div'); block.className = 'liuli-wp-block liuli-hot-update'; host.append(block);
+    const title = document.createElement('div'); title.className = 'liuli-wp-title'; title.textContent = '主题热更新'; block.append(title);
+    const hint = document.createElement('div'); hint.className = 'liuli-field__hint';
+    hint.textContent = 'CSS 原位更新；脚本更新会刷新 QQ 页面，不退出 QQ。首次升级需在 LiteLoader 中重新加载琉璃。'; block.append(hint);
+    const status = document.createElement('div'); status.className = 'liuli-field__hint'; status.dataset.hotStatus = ''; status.textContent = '正在读取状态…'; block.append(status);
+    const group = document.createElement('div'); group.className = 'liuli-seg'; block.append(group);
+    const api = window.liuli_api;
+    function render(info) {
+        showStatus(block, info);
+    }
+    const error = reason => { status.textContent = String(reason?.message).includes('No handler registered') || !api?.themeInfo
+        ? '接口尚未载入，请在 LiteLoader 插件管理中重新加载琉璃。' : reason.message || String(reason); };
+    for (const [label, enabled] of [['自动更新：开',true],['自动更新：关',false]]) {
+        const button = document.createElement('button'); button.type = 'button'; button.className = 'liuli-seg__item'; button.textContent = label;
+        button.dataset.hotEnabled = String(enabled);
+        button.onclick = async () => { try { render(await api.themeAuto(enabled)); } catch (reason) { error(reason); } };
+        group.append(button);
+    }
+    const reload = document.createElement('button'); reload.type = 'button'; reload.className = 'liuli-seg__item'; reload.textContent = '应用更新并刷新页面';
+    reload.onclick = async () => { try { status.textContent = (await api.themeReload()).message; } catch (reason) { error(reason); } }; group.append(reload);
+    const memory = document.createElement('button'); memory.type = 'button'; memory.className = 'liuli-seg__item'; memory.textContent = '读取进程内存'; group.append(memory);
+    const output = document.createElement('pre'); output.className = 'liuli-field__hint'; output.style.cssText = 'white-space:pre-wrap;overflow-wrap:anywhere;'; block.append(output);
+    memory.onclick = async () => {
+        memory.disabled = true;
+        try {
+            const snapshot = await api.themeMemory();
+            output.textContent = snapshot.processes.sort((a,b) => b.workingSetMB-a.workingSetMB).map(item =>
+                `PID ${item.pid}${item.pid === snapshot.currentRendererPid ? '（当前窗口）' : ''} · ${item.type} · 工作集 ${item.workingSetMB}MB · 私有 ${item.privateMB ?? '—'}MB`).join('\n') + '\n进程包含 QQ 与同进程插件，不能据此分摊单个插件占用。';
+        } catch (reason) { error(reason); }
+        finally { memory.disabled = false; }
+    };
+    if (api?.themeInfo) api.themeInfo().then(render).catch(error); else error(new Error('接口尚未载入'));
+}

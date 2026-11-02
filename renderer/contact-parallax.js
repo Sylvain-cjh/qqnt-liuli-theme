@@ -1,9 +1,9 @@
+import { loadEffects, subscribeEffects } from './effect-settings.js';
 // Pointer coordinates use the resting row bounds, never the transformed bounds.
 export function installContactParallax() {
     const selector = '.recent-contact .recent-contact-item:not([data-liuli-projection])';
     const fine = matchMedia('(hover: hover) and (pointer: fine)');
-    const scale = 1.25;
-    const expansion = (scale - 1) / 2;
+    let options = loadEffects(), scale = options.scale, expansion = (scale - 1) / 2;
     const layout = { styles: [] };
     const offsets = new Map();
     const spacing = new Map();
@@ -11,6 +11,14 @@ export function installContactParallax() {
     let lastFrame = 0;
     let active = null, frame = 0;
     const returning = new Map();
+    const cards = new Map();
+    const keyOf = row => row.getAttribute('data-contact-id') || row;
+    function transition(state, phase) {
+        state.phase = phase;
+        state.goal = phase === 'entering' || phase === 'hovered' ? 1 : 0;
+        if (phase === 'leaving') returning.set(state, true); else returning.delete(state);
+        if (phase !== 'disposed') state.row.setAttribute('data-liuli-depth', phase === 'leaving' ? 'return' : 'active');
+    }
     const listeners = [];
     const clamp = n => Math.max(-1, Math.min(1, n));
     function retainRow(state) {
@@ -88,6 +96,8 @@ export function installContactParallax() {
     function restore(state) {
         // Returning states are advanced by the shared frame loop.
         returning.delete(state);
+        state.phase = 'disposed';
+        if (cards.get(state.key) === state) cards.delete(state.key);
         state.observer.disconnect();
         state.selectionAnimation?.cancel();
         state.exitAnimation?.cancel();
@@ -101,16 +111,14 @@ export function installContactParallax() {
         if (!active) return;
         const state = active;
         active = null;
-        state.goal = 0;
         if (immediate) restore(state);
-        else { state.row.setAttribute('data-liuli-depth', 'return'); returning.set(state, true); wake(); }
+        else { transition(state, 'leaving'); wake(); }
     }
     function enter(row) {
         reset();
-        const existing = [...returning.keys()].find(state => state.row === row);
+        const existing = cards.get(keyOf(row));
         if (existing) {
-            returning.delete(existing); active = existing; existing.goal = 1;
-            existing.row.setAttribute('data-liuli-depth', 'active'); wake(); return;
+            active = existing; retainRow(existing); transition(existing, 'entering'); wake(); return;
         }
         const bounds = row.getBoundingClientRect();
         const shifted = offsets.get(row) || 0;
@@ -128,6 +136,7 @@ export function installContactParallax() {
                 if (records.some(r => r.target === state.row || state.row.contains(r.target))) syncProjection(state, true);
             }) };
         active = state;
+        state.key = keyOf(row); cards.set(state.key, state); transition(state, 'entering');
         // Virtual-list recycling must not carry the previous contact's tilt forward.
         state.observer.observe(row.parentElement, { childList: true, subtree: true, characterData: true,
             attributes: true, attributeFilter: ['class', 'data-contact-id'] });
@@ -151,18 +160,19 @@ export function installContactParallax() {
     function draw(now) {
         frame = 0;
         const dt = Math.min(40, Math.max(0, now - lastFrame)); lastFrame = now;
-        const states = [...returning.keys(), ...(active ? [active] : [])];
+        const states = [...cards.values()];
         let moving = false;
         for (const state of states) {
             if (!retainRow(state)) { restore(state); if (active === state) active = null; continue; }
-            state.progress = Math.max(0, Math.min(1, state.progress + (state.goal ? dt / 420 : -dt / 340)));
+            state.progress = Math.max(0, Math.min(1, state.progress + (state.goal ? dt / options.enterMs : -dt / options.exitMs)));
+            if (state.goal && state.progress === 1 && state.phase !== 'hovered') transition(state, 'hovered');
             const t = state.progress;
             state.eased = t * t * (3 - 2 * t);
             const follow = 1 - Math.exp(-dt / 65);
-            state.rx += ((state.goal ? -state.y * 9 : 0) - state.rx) * follow;
-            state.ry += ((state.goal ? state.x * 7 : 0) - state.ry) * follow;
+            state.rx += ((state.goal ? -state.y * 9 * options.tilt : 0) - state.rx) * follow;
+            state.ry += ((state.goal ? state.x * 7 * options.tilt : 0) - state.ry) * follow;
             if (!state.goal && t === 0) { restore(state); continue; }
-            if (state.progress !== state.goal || Math.abs(state.rx - (state.goal ? -state.y * 9 : 0)) > .01 || Math.abs(state.ry - (state.goal ? state.x * 7 : 0)) > .01) moving = true;
+            if (state.progress !== state.goal || Math.abs(state.rx - (state.goal ? -state.y * 9 * options.tilt : 0)) > .01 || Math.abs(state.ry - (state.goal ? state.x * 7 * options.tilt : 0)) > .01) moving = true;
         }
         const live = states.filter(state => state.row.isConnected && (state === active || returning.has(state)));
         const root = live[0]?.row.parentElement || layoutRoot;
@@ -178,15 +188,15 @@ export function installContactParallax() {
             let above = 0, below = 0;
             for (const state of live) {
                 if (row === state.row) continue;
-                const extra = (state.bounds.height * expansion + 4) * state.eased;
-                if (restingTop < state.bounds.top) above = Math.max(above, extra);
-                else below = Math.max(below, extra);
+                const extra = options.spacing ? (state.bounds.height * expansion + 4) * state.eased : 0;
+                if (restingTop < state.bounds.top) above = options.shareSpace ? Math.max(above, extra) : above + extra;
+                else below = options.shareSpace ? Math.max(below, extra) : below + extra;
             }
             const target = below - above;
             const motion = spacing.get(row) || { value: offsets.get(row) || 0, releaseAt: 0 };
             const shrinking = Math.abs(target) < Math.abs(motion.value) - .01 && target * motion.value >= 0;
             if (!shrinking) motion.releaseAt = 0;
-            else if (!motion.releaseAt) motion.releaseAt = now + 140;
+            else if (!motion.releaseAt) motion.releaseAt = now + options.holdMs;
             if (!shrinking || now >= motion.releaseAt) motion.value += (target - motion.value) * (1 - Math.exp(-dt / (shrinking ? 135 : 60)));
             if (Math.abs(target - motion.value) < .02) motion.value = target;
             const shift = motion.value;
@@ -208,6 +218,7 @@ export function installContactParallax() {
         else if (!live.length) { releaseStyles(layout); offsets.clear(); spacing.clear(); layoutRoot = null; }
     }
     function move(event) {
+        if (!options.enabled) return;
         if (event.buttons && active) return;
         if (event.pointerType === 'touch' || !fine.matches || event.buttons ||
             document.body?.dataset.liuliScope !== 'main') { reset(); return; }
@@ -271,6 +282,9 @@ export function installContactParallax() {
     listen(window, 'blur', clearForScroll);
     listen(document, 'visibilitychange', () => { if (document.hidden) clearForScroll(); });
     listen(fine, 'change', clearForScroll);
+    const unsubscribeEffects = subscribeEffects(next => {
+        clearForScroll(); options = next; scale = next.scale; expansion = (scale - 1) / 2;
+    });
     let reorderFrame = 0, selectedSnapshot = null, reorderAnimation = null, reorderDelta = 0, scrollAt = 0;
     const sampleSelected = () => {
         reorderFrame = 0;
@@ -306,6 +320,15 @@ export function installContactParallax() {
             record.target.classList.contains('recent-contact-item--selected'));
         if (!structural && !selection) return;
         if (structural) {
+            layout.styles = layout.styles.filter(record => {
+                if (record.node.isConnected) return true;
+                if (record.node.style.getPropertyValue(record.property) === record.written) {
+                    if (record.value) record.node.style.setProperty(record.property, record.value, record.priority);
+                    else record.node.style.removeProperty(record.property);
+                }
+                return false;
+            });
+            for (const row of offsets.keys()) if (!row.isConnected) { offsets.delete(row); spacing.delete(row); }
             for (const state of [...returning.keys(), ...(active ? [active] : [])]) {
                 if (!retainRow(state)) continue;
                 const rect = state.row.getBoundingClientRect();
@@ -325,6 +348,7 @@ export function installContactParallax() {
         if (!reorderFrame) reorderFrame = requestAnimationFrame(sampleSelected);
     }, { capture: true, passive: true });
     function dispose() {
+        unsubscribeEffects();
         clearForScroll();
         reorderObserver.disconnect(); cancelAnimationFrame(reorderFrame); reorderAnimation?.cancel();
         for (const remove of listeners) remove();
