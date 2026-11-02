@@ -3,6 +3,9 @@
 const { contextBridge, ipcRenderer } = require("electron");
 
 const api = {
+    startWindowDrag: () => ipcRenderer.invoke('LiteLoader.liuli.dragStart'),
+    moveWindowDrag: () => ipcRenderer.send('LiteLoader.liuli.dragMove'),
+    stopWindowDrag: () => ipcRenderer.send('LiteLoader.liuli.dragStop'),
     openDevTools: async () => {
         try { return await ipcRenderer.invoke("LiteLoader.liuli.openDevTools"); }
         catch (error) {

@@ -17,7 +17,7 @@
 
 > 从壁纸取色，用 Material Color Utilities 派生整套 M3 配色，给 QQNT 换上一层会跟着壁纸呼吸的磨砂玻璃外观。**不依赖 BetterQQNT。**
 
-> 本分支基于 [LilycleHeart/qqnt-liuli-theme](https://github.com/LilycleHeart/qqnt-liuli-theme) 1.3.0，保留原版配色、壁纸和布局设置，补充会话交互、聊天排版与滚动处理。当前版本 **1.3.0-local.21**；新增改动仍在实际使用中调整，未完成全面兼容性验证。
+> 本分支基于 [LilycleHeart/qqnt-liuli-theme](https://github.com/LilycleHeart/qqnt-liuli-theme) 1.3.0，保留原版配色、壁纸和布局设置，补充会话交互、聊天排版与滚动处理。当前版本 **1.3.0-local.22**；新增改动仍在实际使用中调整，未完成全面兼容性验证。
 
 > [!IMPORTANT]
 > **只支持 Windows 版 QQ 9.9.36**（LiteLoaderQQNT 1.4.1）。我们只在这个版本上开发和测试，其它版本（更旧的 9.9.21、9.9.28，或以后的新版）不保证兼容，可能出现输入框点不动、界面错位、启动报「文件已损坏」等问题。遇到问题请先把 QQ 更新 / 安装到 9.9.36 再试，详见 [支持的版本](#支持的版本)。

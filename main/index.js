@@ -6,6 +6,7 @@ const path = require("node:path");
 const { ipcMain, shell, BrowserWindow } = require("electron");
 
 const SLUG = "liuli-dsh-theme";
+const disposeWindowDrag = require('./window-drag.js')();
 const LOG = path.join(LiteLoader.path.data, SLUG, "plugin.log");
 
 function log(message) {
@@ -66,6 +67,7 @@ ipcMain.handle("LiteLoader.liuli.openExternal", async (_e, url) => {
 
 module.exports = {
     dispose() {
+        disposeWindowDrag();
         for (const channel of ['LiteLoader.liuli.selfUid', 'LiteLoader.liuli.openDevTools', 'LiteLoader.liuli.openExternal', 'LiteLoader.liuli.diagExport', 'LiteLoader.liuli.diagOpenPath']) ipcMain.removeHandler(channel);
         ipcMain.removeAllListeners('LiteLoader.liuli.diagLog');
         selfUid = '';

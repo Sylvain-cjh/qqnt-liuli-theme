@@ -8,6 +8,7 @@ const SLUG = "liuli-dsh-theme";
 import { installLayout, applyBar, nativeBarItem, applyAll as llLayoutPass, buildLayoutSection } from "./layout-custom.js";
 import { installArkExternal } from "./ark-external.js";
 import { installContactParallax } from "./contact-parallax.js";
+import { installDragHandle } from "./window-drag.js";
 import { ROLE_KEY, loadRoles, roleVars, accentPalette, buildRoleControls } from "./color-roles.js";
 // 诊断运行时（契约 installer/DIAG-COVERAGE.md 第三、3.2、3.3、3.5 节）：
 // 尽早安装，后面整个模块体里任何 console.error / 未捕获异常 / Promise 拒绝
@@ -1494,6 +1495,7 @@ function ensureHoverEntries() {
             drag.title = "按住拖动窗口";
             drag.setAttribute("aria-hidden", "true");
             document.body.appendChild(drag);
+            installDragHandle(drag, toast);
         }
         [["liuli-top-hint-l", "唤出个人信息"], ["liuli-top-hint-r", "唤出窗口按钮"]].forEach(function (pair) {
             if (document.getElementById(pair[0])) return;
