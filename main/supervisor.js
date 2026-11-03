@@ -26,17 +26,26 @@ function windows() {
 function watchVisibility(window) {
     if (!window || window.isDestroyed() || visibilityListeners.has(window)) return;
     const contents = window.webContents;
-    const send = () => {
+    let lastVisible;
+    const send = (forced, repeat = false) => {
         if (window.isDestroyed() || contents.isDestroyed()) return;
-        try { contents.send(channel('themeUpdate'), { type: 'visibility', visible: window.isVisible() && !window.isMinimized() }); } catch {}
+        const visible = typeof forced === 'boolean' ? forced : window.isVisible() && !window.isMinimized();
+        if (!repeat && visible === lastVisible) return;
+        lastVisible = visible;
+        try { contents.send(channel('themeUpdate'), { type: 'visibility', visible }); } catch {}
     };
+    const hide = () => send(false);
+    const show = () => send();
+    const loaded = () => send(undefined, true);
     const remove = () => {
-        for (const name of ['show','hide','minimize','restore']) window.removeListener(name, send);
-        contents.removeListener('did-finish-load', send);
+        for (const name of ['show','restore']) window.removeListener(name, show);
+        for (const name of ['hide','minimize']) window.removeListener(name, hide);
+        contents.removeListener('did-finish-load', loaded);
         window.removeListener('closed', remove); visibilityListeners.delete(window);
     };
-    for (const name of ['show','hide','minimize','restore']) window.on(name, send);
-    contents.on('did-finish-load', send); window.once('closed', remove);
+    for (const name of ['show','restore']) window.on(name, show);
+    for (const name of ['hide','minimize']) window.on(name, hide);
+    contents.on('did-finish-load', loaded); window.once('closed', remove);
     visibilityListeners.set(window, remove);
 }
 function report() { for (const window of windows()) { try { window.webContents.send(channel('themeUpdate'), { type: 'status', ...info() }); } catch {} } }

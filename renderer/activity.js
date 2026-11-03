@@ -1,6 +1,31 @@
 // Native visibility supplements document.hidden when QQ disables throttling.
 let nativeVisible = true, active = !document.hidden;
 const subscribers = new Set();
+// Resume maintenance after the first paint, one job per frame. Hiding cancels
+// the queue immediately, including rapid minimize/restore cycles.
+const resumeJobs = new Map();
+let resumeFrame = 0, resumeTimer = 0, activityEpoch = 0;
+function cancelResume() {
+    cancelAnimationFrame(resumeFrame); clearTimeout(resumeTimer);
+    resumeFrame = resumeTimer = 0; resumeJobs.clear();
+}
+function drainResume() {
+    resumeFrame = 0;
+    if (!active || !resumeJobs.size) return;
+    const [key, callback] = resumeJobs.entries().next().value;
+    resumeJobs.delete(key);
+    try { callback(); } catch (error) { console.error('[liuli resume]', error); }
+    if (resumeJobs.size) resumeFrame = requestAnimationFrame(drainResume);
+}
+export function afterThemePaint(key, callback) {
+    if (!active) return;
+    resumeJobs.set(key, callback);
+    if (resumeFrame || resumeTimer) return;
+    resumeFrame = requestAnimationFrame(() => {
+        resumeFrame = 0;
+        resumeTimer = setTimeout(() => { resumeTimer = 0; if (active) resumeFrame = requestAnimationFrame(drainResume); }, 0);
+    });
+}
 let surfaces = [];
 export const isThemeActive = () => active;
 export function refreshSurfaceState() {
@@ -29,6 +54,8 @@ function update() {
     document.body?.toggleAttribute('data-liuli-idle', !next);
     if (next === active) { refreshSurfaceState(); return; }
     active = next;
+    activityEpoch++;
+    cancelResume();
     refreshSurfaceState();
     for (const callback of [...subscribers]) {
         try { callback(active); } catch (error) { console.error('[liuli activity]', error); }
@@ -46,12 +73,13 @@ export function activeInterval(callback, delay) {
 }
 const api = window.liuli_api;
 const unsubscribeIPC = api?.onThemeUpdate?.(event => {
-    if (event.type === 'visibility') { nativeVisible = event.visible; update(); }
+    if (event.type === 'visibility') { activityEpoch++; nativeVisible = event.visible; update(); }
 });
-api?.themeInfo?.().then(info => { if (typeof info.windowVisible === 'boolean') { nativeVisible = info.windowVisible; update(); } }).catch(() => {});
+const initialEpoch = activityEpoch;
+api?.themeInfo?.().then(info => { if (initialEpoch === activityEpoch && typeof info.windowVisible === 'boolean') { nativeVisible = info.windowVisible; update(); } }).catch(() => {});
 document.addEventListener('visibilitychange', update);
 if (document.body) update(); else document.addEventListener('DOMContentLoaded', update, { once: true });
 window.addEventListener('pagehide', () => {
-    nativeVisible = false; update(); unsubscribeIPC?.(); subscribers.clear();
+    nativeVisible = false; update(); cancelResume(); unsubscribeIPC?.(); subscribers.clear();
     document.removeEventListener('visibilitychange', update);
 }, { once: true });

@@ -6,7 +6,7 @@
 // 设置存在 localStorage（设置窗口和主界面同源，storage 事件实时同步）。
 // 菜单项、工具栏按钮、侧栏按钮都是运行时见到一个记一个（SEEN），设置页按这份名单列出来。
 
-import { isThemeActive, onThemeActivity } from './activity.js';
+import { isThemeActive, onThemeActivity, afterThemePaint } from './activity.js';
 const KEY = "liuli-layout";
 const SEEN_KEY = "liuli-layout-seen";
 const DEFAULTS = { menuCompact: false, menuOrder: [], barOrder: [], barPinned: 1, navHidden: [], titlebar: "float" };
@@ -194,7 +194,7 @@ export function installLayout(barChanged) {
     watchMenus();
     addEventListener("storage", e => { if (e.key === KEY) applyAll(); });
     applyAll();
-    onThemeActivity(enabled => { if (enabled) applyAll(); });
+    onThemeActivity(enabled => { if (enabled) afterThemePaint('layout', applyAll); });
 }
 
 /* ════════════════ 设置页 ════════════════ */
