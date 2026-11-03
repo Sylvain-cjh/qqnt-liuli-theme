@@ -6,6 +6,7 @@ const registry = globalThis[Symbol.for('liuli.theme.supervisor')] ||= { current:
 registry.current?.dispose();
 const changed = new Set();
 const visibilityListeners = new Map();
+const pendingRefresh = new Set();
 const state = { enabled: LiteLoader.api.config.get(configKey, { enabled: true }).enabled !== false,
     loadedVersion: '', lastUpdate: '', error: '', watching: false };
 const controls = ['themeInfo','themeReload','themeAuto','themeMemory'];
@@ -19,7 +20,11 @@ function info() {
 }
 function windows() {
     return BrowserWindow.getAllWindows().filter(window => {
-        try { return !window.isDestroyed() && !window.webContents.isDestroyed() && ['file:', 'local:', 'app:'].includes(new URL(window.webContents.getURL()).protocol); }
+        try {
+            if (window.isDestroyed() || window.webContents.isDestroyed()) return false;
+            const url = new URL(window.webContents.getURL());
+            return ['file:', 'local:', 'app:'].includes(url.protocol) && /(?:^|\/)index\.html$/i.test(url.pathname);
+        }
         catch { return false; }
     });
 }
@@ -35,13 +40,19 @@ function watchVisibility(window) {
         try { contents.send(channel('themeUpdate'), { type: 'visibility', visible }); } catch {}
     };
     const hide = () => send(false);
-    const show = () => send();
+    const show = () => {
+        if (window.isVisible() && !window.isMinimized() && pendingRefresh.delete(contents)) {
+            try { contents.reloadIgnoringCache(); return; } catch {}
+        }
+        send();
+    };
     const loaded = () => send(undefined, true);
     const remove = () => {
         for (const name of ['show','restore']) window.removeListener(name, show);
         for (const name of ['hide','minimize']) window.removeListener(name, hide);
         contents.removeListener('did-finish-load', loaded);
         window.removeListener('closed', remove); visibilityListeners.delete(window);
+        pendingRefresh.delete(contents);
     };
     for (const name of ['show','restore']) window.on(name, show);
     for (const name of ['hide','minimize']) window.on(name, hide);
@@ -73,7 +84,7 @@ function validate() {
     function imports(file) {
         if (seen.has(file)) return; seen.add(file);
         const source = fs.readFileSync(file, 'utf8');
-        for (const match of source.matchAll(/(?:from|import)\s*['"](\.[^'"]+)['"]/g)) {
+        for (const match of source.matchAll(/(?:from\s*|import\s*(?:\(\s*)?)['"](\.[^'"]+)['"]/g)) {
             const child = path.resolve(path.dirname(file), match[1]);
             if (!child.startsWith(root + path.sep)) throw Error('模块路径超出主题目录');
             imports(child);
@@ -81,7 +92,13 @@ function validate() {
     }
     imports(path.join(root, 'renderer/index.js'));
 }
-function refresh() { for (const window of windows()) { try { window.webContents.reloadIgnoringCache(); } catch {} } }
+function refresh() {
+    for (const window of windows()) {
+        watchVisibility(window);
+        if (!window.isVisible() || window.isMinimized()) { pendingRefresh.add(window.webContents); continue; }
+        try { window.webContents.reloadIgnoringCache(); } catch {}
+    }
+}
 function reloadRuntime() {
     validate();
     const previousVersion = state.loadedVersion;
@@ -139,6 +156,7 @@ function stop() {
     if (stopped) return;
     stopped = true; clearTimeout(timer); changed.clear(); watcher?.close(); state.watching = false;
     for (const remove of [...visibilityListeners.values()]) remove();
+    pendingRefresh.clear();
     for (const name of controls) ipcMain.removeHandler(channel(name));
     clean();
     runtime = null; watcher = null; timer = null;
