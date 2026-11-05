@@ -360,10 +360,12 @@ body[data-liuli-scope="main"] .recent-contact .recent-contact-item .contact-name
   max-height: calc(100vh - 24px);
   overflow: hidden;
   border: 1px solid color-mix(in srgb, var(--ll-brand, #aaa) 24%, transparent);
-  border-radius: 16px;
-  background: var(--ll-surface-high, #302c32);
+  border-radius: var(--ll-radius, 14px);
+  background: var(--ll-noise), rgba(var(--ll-acrylic), var(--ll-material-opacity));
+  backdrop-filter: var(--ll-material-blur);
+  -webkit-backdrop-filter: var(--ll-material-blur);
   color: var(--ll-on-glass, #eee);
-  box-shadow: 0 8px 28px rgba(0, 0, 0, .22);
+  box-shadow: var(--ll-float-shadow, var(--ll-shadow-float));
   font-family: var(--ll-font, inherit);
   text-align: left;
   pointer-events: none;
