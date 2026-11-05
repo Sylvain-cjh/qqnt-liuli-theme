@@ -1,5 +1,7 @@
 import { loadEffects, subscribeEffects } from './effect-settings.js';
 import { isThemeActive, onThemeActivity } from './activity.js';
+let hoveredRow = () => null;
+export const getHoveredContact = () => hoveredRow();
 // Pointer coordinates use the resting row bounds, never the transformed bounds.
 export function installContactParallax() {
     const selector = '.recent-contact .recent-contact-item:not([data-liuli-projection])';
@@ -11,6 +13,7 @@ export function installContactParallax() {
     let layoutRoot = null;
     let lastFrame = 0;
     let active = null, frame = 0;
+    hoveredRow = () => active?.row || null;
     const returning = new Map();
     const cards = new Map();
     const dirtyCards = new Set();
@@ -392,6 +395,7 @@ export function installContactParallax() {
         if (!reorderFrame) reorderFrame = requestAnimationFrame(sampleSelected);
     }, { capture: true, passive: true });
     function dispose() {
+        hoveredRow = () => null;
         unsubscribeEffects();
         unsubscribeActivity();
         clearForScroll();

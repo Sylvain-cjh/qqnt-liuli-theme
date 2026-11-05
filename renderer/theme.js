@@ -8,6 +8,7 @@ const SLUG = "liuli-dsh-theme";
 import { installLayout, applyBar, nativeBarItem, applyAll as llLayoutPass, buildLayoutSection } from "./layout-custom.js";
 import { installArkExternal } from "./ark-external.js";
 import { installContactParallax } from "./contact-parallax.js";
+import { installContactPreview } from "./contact-preview.js";
 import { installDragHandle } from "./window-drag.js";
 import { buildEffectSettings } from "./effect-settings.js";
 import { installThemeUpdates, buildHotUpdateSettings } from "./hot-update.js";
@@ -3038,6 +3039,7 @@ async function initPanel() {
         installMessageObserver();
         installSideListObserver();
         installContactParallax();
+        installContactPreview();
         llWatchContactList();
         liuliMessagePass();
         try { await initPanel(); } catch (e) { console.warn("[liuli-dsh-theme] panel failed:", e && e.message); }

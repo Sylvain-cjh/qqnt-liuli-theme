@@ -350,3 +350,48 @@ body[data-liuli-scope="main"] .recent-contact .recent-contact-item .contact-name
     transform: none;
   }
 }
+/* Read-only hover preview. No copied media, blur animation or background loop. */
+.liuli-contact-preview {
+  position: fixed;
+  inset: auto;
+  margin: 0;
+  box-sizing: border-box;
+  padding: 14px 16px;
+  max-height: calc(100vh - 24px);
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--ll-brand, #aaa) 24%, transparent);
+  border-radius: 16px;
+  background: var(--ll-surface-high, #302c32);
+  color: var(--ll-on-glass, #eee);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, .22);
+  font-family: var(--ll-font, inherit);
+  text-align: left;
+  pointer-events: none;
+  z-index: 2147483100;
+  animation: liuli-preview-in 140ms ease-out both;
+}
+.liuli-contact-preview [data-preview-name] {
+  font-size: 15px; line-height: 22px; font-weight: 600;
+  white-space: normal; overflow-wrap: anywhere;
+}
+.liuli-contact-preview [data-preview-meta] {
+  margin-top: 4px; color: var(--ll-on-glass-2, #bbb);
+  font-size: 12px; line-height: 18px; overflow-wrap: anywhere;
+}
+.liuli-contact-preview [data-preview-meta]:empty { display: none; }
+.liuli-contact-preview [data-preview-summary] {
+  margin-top: 10px; font-size: 14px; line-height: 22px;
+  white-space: pre-wrap; overflow-wrap: anywhere;
+  max-height: min(220px, 35vh); overflow: hidden;
+}
+.liuli-contact-preview .liuli-preview-hint {
+  margin-top: 10px; font-size: 11px; line-height: 16px;
+  color: var(--ll-on-glass-3, #999);
+}
+@keyframes liuli-preview-in {
+  from { opacity: 0; transform: translateY(3px); }
+  to { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .liuli-contact-preview { animation: none; }
+}
