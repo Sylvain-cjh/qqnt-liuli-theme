@@ -1,6 +1,13 @@
 // Native visibility supplements document.hidden when QQ disables throttling.
 let nativeVisible = true, active = !document.hidden;
 const subscribers = new Set();
+const RESUME_KEY = 'liuli-fast-resume';
+export function fastResumeEnabled() {
+    try { return localStorage.getItem(RESUME_KEY) === '1'; } catch { return false; }
+}
+export function setFastResume(enabled) {
+    localStorage.setItem(RESUME_KEY, enabled ? '1' : '0');
+}
 // Resume maintenance after the first paint, one job per frame. Hiding cancels
 // the queue immediately, including rapid minimize/restore cycles.
 const resumeJobs = new Map();

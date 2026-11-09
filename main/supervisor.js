@@ -16,7 +16,7 @@ const valid = event => !event.sender.isDestroyed() && event.senderFrame === even
 function info() {
     let version = '';
     try { version = JSON.parse(fs.readFileSync(path.join(root, 'manifest.json'), 'utf8')).version; } catch {}
-    return { ...state, installedVersion: version };
+    return { ...state, installedVersion: version, pendingWindows: pendingRefresh.size };
 }
 function windows() {
     return BrowserWindow.getAllWindows().filter(window => {
@@ -40,13 +40,8 @@ function watchVisibility(window) {
         try { contents.send(channel('themeUpdate'), { type: 'visibility', visible }); } catch {}
     };
     const hide = () => send(false);
-    const show = () => {
-        if (window.isVisible() && !window.isMinimized() && pendingRefresh.delete(contents)) {
-            try { contents.reloadIgnoringCache(); return; } catch {}
-        }
-        send();
-    };
-    const loaded = () => send(undefined, true);
+    const show = () => send();
+    const loaded = () => { pendingRefresh.delete(contents); send(undefined, true); };
     const remove = () => {
         for (const name of ['show','restore']) window.removeListener(name, show);
         for (const name of ['hide','minimize']) window.removeListener(name, hide);
@@ -96,6 +91,7 @@ function refresh() {
     for (const window of windows()) {
         watchVisibility(window);
         if (!window.isVisible() || window.isMinimized()) { pendingRefresh.add(window.webContents); continue; }
+        pendingRefresh.delete(window.webContents);
         try { window.webContents.reloadIgnoringCache(); } catch {}
     }
 }
@@ -128,7 +124,7 @@ function apply(files, manual = false) {
                 throw error;
             }
             if (loginUid) registry.current.onLogin(loginUid);
-            refresh(); return;
+            registry.current.refresh(); return;
         }
         if (manual || files.some(file => file.startsWith('main/') || file === 'manifest.json')) reloadRuntime();
         if (manual || files.some(file => !file.endsWith('.css'))) refresh();
@@ -194,6 +190,7 @@ ipcMain.handle(channel('themeAuto'), (event, enabled) => {
     report(); return info();
 });
 registry.current = {
+    refresh() { refresh(); report(); },
     onLogin(uid) { loginUid = String(uid || ''); runtime?.onLogin?.(uid); },
     onBrowserWindowCreated(window) { watchVisibility(window); runtime?.onBrowserWindowCreated?.(window); },
     dispose: stop

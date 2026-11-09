@@ -12,9 +12,9 @@ import { installContactPreview } from "./contact-preview.js";
 import { installDragHandle } from "./window-drag.js";
 import { buildEffectSettings } from "./effect-settings.js";
 import { installThemeUpdates, buildHotUpdateSettings } from "./hot-update.js";
-import { isThemeActive, onThemeActivity, activeInterval, refreshSurfaceState, afterThemePaint } from "./activity.js";
+import { isThemeActive, onThemeActivity, activeInterval, refreshSurfaceState, afterThemePaint, fastResumeEnabled } from "./activity.js";
 const llOwnedAnimations = new Set();
-let llDeferredSettings = false, llDeferredWallpaper = false, llDeferredPalette = false;
+let llDeferredSettings = false, llDeferredWallpaper = false, llDeferredPalette = false, llResumeColors = false;
 function animateOwned(element, keyframes, options) {
     if (!isThemeActive()) return null;
     const animation = element.animate(keyframes, options);
@@ -1336,9 +1336,9 @@ function llMsgId(el) {
 function llMotionPass(added) {
     try {
         var key = llChatKey();
-        var items = document.querySelectorAll(".chat-msg-area .ml-item[id]");
-        if (!items.length) return;
         if (key !== llMsgSeen.chat) {
+            var items = document.querySelectorAll(".chat-msg-area .ml-item[id]");
+            if (!items.length) return;
             var first = llMsgSeen.chat !== null;
             llMsgSeen.chat = key;
             llMotionPending.clear();
@@ -1390,14 +1390,18 @@ function llMotionPass(added) {
 
 function installMessageObserver() {
     if (window.__liuliMsgObs) return;
-    let frame = 0, full = true, resuming = false;
+    let frame = 0, full = true, resuming = false, resumeQueued = false, hiddenDirty = true;
     const dirty = new Set();
     function observe() { if (isThemeActive()) obs.observe(document.body, { childList: true, characterData: true, subtree: true }); }
     function flush() {
         frame = 0;
         if (!isThemeActive() || window.__liuliPause) { dirty.clear(); full = true; return; }
         const area = document.querySelector('.chat-msg-area');
-        if (!area) { dirty.clear(); return; }
+        if (!area) { dirty.clear(); resuming = false; return; }
+        if (resuming && full) {
+            area.querySelectorAll('.ml-item[id]').forEach(item => dirty.add(item));
+            full = false;
+        }
         const scrolling = performance.now() - (window.__llScrollT || 0) < 120;
         const items = [...dirty].filter(x => x.isConnected && area.contains(x));
         for (const item of [...dirty]) if (!item.isConnected || !area.contains(item)) dirty.delete(item);
@@ -1425,12 +1429,21 @@ function installMessageObserver() {
         }
     }
     const obs = new MutationObserver(records => {
-        if (!isThemeActive()) { dirty.clear(); full = true; return; }
+        const hidden = !isThemeActive();
         let hit = false;
         for (const rec of records) {
             const target = rec.target.nodeType === 1 ? rec.target : rec.target.parentElement;
             if (target?.closest('.liuli-contact-projection, #liuli-embedded, .liuli-panel, .recent-contact, .group-member, .container-sidebar')) continue;
             const area = target?.closest('.chat-msg-area');
+            if (hidden) {
+                if (area || [...rec.addedNodes, ...rec.removedNodes].some(node =>
+                    node.nodeType === 1 && (node.matches('.chat-msg-area') || node.querySelector('.chat-msg-area')))) {
+                    hiddenDirty = true;
+                    obs.disconnect();
+                    return;
+                }
+                continue;
+            }
             if (area) {
                 const item = target.closest('.ml-item[id]');
                 if (item && !target.closest('.send-time')) { dirty.add(item); hit = true; }
@@ -1444,23 +1457,31 @@ function installMessageObserver() {
                 if (area || full) node.querySelectorAll('.ml-item[id]').forEach(x => { dirty.add(x); hit = true; });
             }
         }
-        if (hit && !frame && isThemeActive()) frame = requestAnimationFrame(flush);
+        if (hit && !frame && !resumeQueued && !hidden) frame = requestAnimationFrame(flush);
     });
     observe(); window.__liuliMsgObs = obs;
     if (isThemeActive()) frame = requestAnimationFrame(flush);
     onThemeActivity(enabled => {
-        obs.disconnect(); cancelAnimationFrame(frame); frame = 0; dirty.clear(); full = true;
+        const fast = fastResumeEnabled();
+        if (!enabled) hiddenDirty = !fast || full || resuming || !!frame || !!dirty.size || !!obs.takeRecords().length;
+        else if (obs.takeRecords().length) hiddenDirty = true;
+        obs.disconnect(); cancelAnimationFrame(frame); frame = 0; dirty.clear();
         llMotionPending.clear();
-        resuming = false;
-        if (enabled) {
-            const area = document.querySelector('.chat-msg-area');
-            if (area) {
-                area.querySelectorAll('.ml-item[id]').forEach(item => dirty.add(item));
-                full = false; resuming = true;
-            }
-            observe();
-            afterThemePaint('messages', () => { if (!frame) frame = requestAnimationFrame(flush); });
+        full = false; resuming = false; resumeQueued = false;
+        if (!enabled) {
+            if (!hiddenDirty) obs.observe(document.body, { childList: true, characterData: true, subtree: true });
+            return;
         }
+        observe();
+        if (fast && !hiddenDirty) return;
+        full = resuming = resumeQueued = true;
+        afterThemePaint('messages', () => {
+            resumeQueued = false;
+            if (!frame) frame = requestAnimationFrame(flush);
+        });
+    });
+    window.addEventListener('storage', event => {
+        if (event.key === LL_MD_KEY && !isThemeActive()) hiddenDirty = true;
     });
     window.addEventListener('pagehide', () => { cancelAnimationFrame(frame); obs.disconnect(); dirty.clear(); }, { once: true });
 }
@@ -3409,10 +3430,11 @@ function installMaintenanceScheduler() {
         let changed = false;
         for (const record of records) {
             const target = record.target.nodeType === 1 ? record.target : record.target.parentElement;
-            if (target?.closest('.chat-msg-area, #liuli-embedded, .liuli-panel, .liuli-contact-projection')) continue;
+            if (target?.closest('.chat-msg-area, #liuli-embedded, .liuli-panel, .liuli-contact-projection, .liuli-contact-preview')) continue;
             // Side-list observers own these updates; do not run whole-page work.
             if (target?.closest('.recent-contact, .group-member')) continue;
-            if ([...record.addedNodes, ...record.removedNodes].length && [...record.addedNodes, ...record.removedNodes].every(n => n.nodeType === 1 && n.matches('.liuli-contact-projection'))) continue;
+            if ([...record.addedNodes, ...record.removedNodes].length && [...record.addedNodes, ...record.removedNodes].every(n => n.nodeType === 1 && n.matches('.liuli-contact-projection, .liuli-contact-preview'))) continue;
+            if (!isThemeActive()) { dirty = true; observer.disconnect(); return; }
             changed = true;
             for (const node of record.addedNodes) if (node.nodeType === 1 && !colorRoots.has(document.body)) {
                 if (colorRoots.size >= 96) { colorRoots.clear(); colorRoots.add(document.body); }
@@ -3426,10 +3448,13 @@ function installMaintenanceScheduler() {
     window.addEventListener('hashchange', schedule);
     window.addEventListener('popstate', schedule);
     onThemeActivity(enabled => {
-        observer.disconnect(); clearTimeout(timer); timer = 0; colorRoots.clear(); dirty = true;
+        dirty ||= !!observer.takeRecords().length || !!colorRoots.size || !fastResumeEnabled();
+        observer.disconnect(); clearTimeout(timer); timer = 0; colorRoots.clear();
         if (enabled) {
             observe();
-            afterThemePaint('maintenance', () => { normalizeColors(document.body); schedule(); });
+            if (dirty) afterThemePaint('maintenance', () => { normalizeColors(document.body); schedule(); });
+        } else if (!dirty) {
+            observer.observe(document.body, { childList: true, subtree: true });
         }
     });
     window.addEventListener('pagehide', () => { clearTimeout(timer); observer.disconnect(); }, { once: true });
@@ -3438,27 +3463,38 @@ function installMaintenanceScheduler() {
 // Suspend owned work without retaining detached virtual-list nodes in background.
 onThemeActivity(enabled => {
     if (enabled) {
-        if (llDeferredSettings) {
-            try { const raw = localStorage.getItem(LL_STORAGE_KEY); if (raw) applySettings(llNormalizeSettings(JSON.parse(raw)), false); } catch {}
-            llDeferredSettings = false;
+        if (fastResumeEnabled()) {
+            afterThemePaint('visual-settings', resumeVisualSettings);
+            return;
         }
-        if (llDeferredWallpaper) { renderWallpaper(loadWallpaperState(), 'resume'); llDeferredWallpaper = false; }
-        // Keep the existing palette instead of deriving it again on every show.
-        if (llDeferredPalette || document.body.dataset.liuliDark !== (llIsDark() ? '1' : '0')) {
-            llApplyMode(false); llDeferredPalette = false;
-        }
-        llApplyFont(); scheduleStick();
+        resumeVisualSettings();
         return;
     }
+    suspendVisualWork();
+});
+function resumeVisualSettings() {
+    if (llDeferredSettings) {
+        try { const raw = localStorage.getItem(LL_STORAGE_KEY); if (raw) applySettings(llNormalizeSettings(JSON.parse(raw)), false); } catch {}
+        llDeferredSettings = false;
+    }
+    if (llDeferredWallpaper) { renderWallpaper(loadWallpaperState(), 'resume'); llDeferredWallpaper = false; }
+    if (llDeferredPalette || document.body.dataset.liuliDark !== (llIsDark() ? '1' : '0')) {
+        llApplyMode(false); llDeferredPalette = false;
+    }
+    if (llResumeColors) { llResumeColors = false; normalizeColors(document.body); }
+    llApplyFont(); scheduleStick();
+}
+function suspendVisualWork() {
     for (const animation of llOwnedAnimations) animation.cancel();
     llOwnedAnimations.clear();
     cancelAnimationFrame(liuliStickRaf); liuliStickRaf = 0;
     if (llColorHandle) {
         if (llColorUsesIdle) cancelIdleCallback(llColorHandle); else clearTimeout(llColorHandle);
     }
+    llResumeColors ||= llColorJobs.length > 0;
     llColorHandle = 0; llColorScheduled = false; llColorJobs.length = 0; llColorRoots = new WeakSet();
     llImageRatioCache.clear(); llMotionPending.clear();
     llMsgSeen.chat = null; llMsgSeen.max = null;
     llSel.obs?.disconnect(); llSel.obs = null; llSel.root = null; llSel.id = null;
     llGM.key = null; llGM.staff = {};
-});
+}

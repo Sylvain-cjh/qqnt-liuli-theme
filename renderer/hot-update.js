@@ -1,9 +1,9 @@
 function showStatus(block, info) {
     const status = block.querySelector('[data-hot-status]');
-    if (status) status.textContent = `已安装 ${info.installedVersion || '未知'} · 已载入 ${info.loadedVersion || '未知'} · ${info.enabled && info.watching ? '正在监听文件变化' : '自动更新已关闭或监听不可用'}${info.error ? ' · ' + info.error : ''}`;
+    if (status) status.textContent = `已安装 ${info.installedVersion || '未知'} · 已载入 ${info.loadedVersion || '未知'} · ${info.enabled && info.watching ? '正在监听文件变化' : '自动更新已关闭或监听不可用'}${info.pendingWindows ? ' · 有后台窗口待应用更新' : ''}${info.error ? ' · ' + info.error : ''}`;
     for (const button of block.querySelectorAll('[data-hot-enabled]')) button.classList.toggle('is-active', info.enabled === (button.dataset.hotEnabled === 'true'));
 }
-import { isThemeActive, onThemeActivity } from './activity.js';
+import { isThemeActive, onThemeActivity, fastResumeEnabled, setFastResume, afterThemePaint } from './activity.js';
 export function installThemeUpdates(files, style) {
     const chunks = new Map();
     const api = window.liuli_api;
@@ -22,7 +22,10 @@ export function installThemeUpdates(files, style) {
         needsApply = true; apply();
     }
     const unsubscribe = api?.onThemeUpdate?.(update);
-    const unsubscribeActivity = onThemeActivity(enabled => { if (enabled) apply(); });
+    const unsubscribeActivity = onThemeActivity(enabled => {
+        if (!enabled || !needsApply) return;
+        if (fastResumeEnabled()) afterThemePaint('theme-css', apply); else apply();
+    });
     window.addEventListener('pagehide', () => { unsubscribe?.(); unsubscribeActivity(); pending.length = 0; chunks.clear(); }, { once: true });
     return entries => {
         for (const [name, text] of entries) chunks.set(name, text);
@@ -34,10 +37,32 @@ export function buildHotUpdateSettings(host) {
     const block = document.createElement('div'); block.className = 'liuli-wp-block liuli-hot-update'; host.append(block);
     const title = document.createElement('div'); title.className = 'liuli-wp-title'; title.textContent = '主题热更新'; block.append(title);
     const hint = document.createElement('div'); hint.className = 'liuli-field__hint';
-    hint.textContent = 'CSS 原位更新；脚本更新会刷新 QQ 页面，不退出 QQ。首次升级需在 LiteLoader 中重新加载琉璃。'; block.append(hint);
+    hint.textContent = 'CSS 原位更新。后台窗口的脚本更新可在回到前台后手动应用。'; block.append(hint);
     const status = document.createElement('div'); status.className = 'liuli-field__hint'; status.dataset.hotStatus = ''; status.textContent = '正在读取状态…'; block.append(status);
     const group = document.createElement('div'); group.className = 'liuli-seg'; block.append(group);
     const api = window.liuli_api;
+    const resumeRow = document.createElement('div'); resumeRow.className = 'liuli-wp-fit liuli-mode-row';
+    const resumeLabel = document.createElement('span'); resumeLabel.textContent = '快速恢复前台'; resumeRow.append(resumeLabel);
+    const resumeGroup = document.createElement('div'); resumeGroup.className = 'liuli-seg'; resumeRow.append(resumeGroup);
+    const resumeButtons = [true, false].map(enabled => {
+        const button = document.createElement('button'); button.type = 'button'; button.className = 'liuli-seg__item';
+        button.textContent = enabled ? '开启' : '关闭';
+        button.onclick = () => {
+            try { setFastResume(enabled); renderResume(); } catch (reason) { error(reason); }
+        };
+        resumeGroup.append(button);
+        return [enabled, button];
+    });
+    function renderResume() {
+        const value = fastResumeEnabled();
+        for (const [enabled, button] of resumeButtons) {
+            button.classList.toggle('is-active', enabled === value);
+            button.setAttribute('aria-pressed', String(enabled === value));
+        }
+    }
+    renderResume(); block.append(resumeRow);
+    const resumeHint = document.createElement('div'); resumeHint.className = 'liuli-field__hint';
+    resumeHint.textContent = '开启后优先显示现有界面，只补做后台发生变化的主题处理。'; block.append(resumeHint);
     function render(info) {
         showStatus(block, info);
     }

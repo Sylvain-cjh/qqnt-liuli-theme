@@ -1,5 +1,5 @@
 import { loadEffects, subscribeEffects } from './effect-settings.js';
-import { isThemeActive, onThemeActivity } from './activity.js';
+import { isThemeActive, onThemeActivity, afterThemePaint, fastResumeEnabled } from './activity.js';
 let hoveredRow = () => null;
 export const getHoveredContact = () => hoveredRow();
 // Pointer coordinates use the resting row bounds, never the transformed bounds.
@@ -387,7 +387,11 @@ export function installContactParallax() {
         clearForScroll(); reorderObserver.disconnect(); rootObserver.disconnect(); observedList = null;
         cancelAnimationFrame(reorderFrame); reorderFrame = 0;
         reorderAnimation?.cancel(); reorderAnimation = null; selectedSnapshot = null;
-        if (enabled) { observeList(); rootObserver.observe(document.body, { childList: true, subtree: true }); sampleSelected(); }
+        if (enabled) {
+            observeList();
+            rootObserver.observe(document.body, { childList: true, subtree: true });
+            if (fastResumeEnabled()) afterThemePaint('contact-selection', sampleSelected); else sampleSelected();
+        }
     });
     listen(document, 'scroll', event => {
         if (!isListScroll(event)) return;
