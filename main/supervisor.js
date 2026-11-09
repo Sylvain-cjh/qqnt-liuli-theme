@@ -10,7 +10,7 @@ const pendingRefresh = new Set();
 const state = { enabled: LiteLoader.api.config.get(configKey, { enabled: true }).enabled !== false,
     loadedVersion: '', lastUpdate: '', error: '', watching: false };
 const controls = ['themeInfo','themeReload','themeAuto','themeMemory'];
-const business = ['selfUid','openDevTools','openExternal','diagExport','diagOpenPath','dragStart'];
+const business = ['selfUid','resetPending','openDevTools','openExternal','diagExport','diagOpenPath','dragStart'];
 const channel = name => 'LiteLoader.liuli.' + name;
 const valid = event => !event.sender.isDestroyed() && event.senderFrame === event.sender.mainFrame && !!BrowserWindow.fromWebContents(event.sender);
 function info() {

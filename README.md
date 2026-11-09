@@ -17,7 +17,7 @@
 
 > 从壁纸取色，用 Material Color Utilities 派生整套 M3 配色，给 QQNT 换上一层会跟着壁纸呼吸的磨砂玻璃外观。**不依赖 BetterQQNT。**
 
-> 本分支基于 [LilycleHeart/qqnt-liuli-theme](https://github.com/LilycleHeart/qqnt-liuli-theme) 1.3.0，保留原版配色、壁纸和布局设置，补充会话交互、聊天排版与滚动处理。当前版本 **1.3.0-local.34**；新增改动仍在实际使用中调整，未完成全面兼容性验证。
+> 本分支基于 [LilycleHeart/qqnt-liuli-theme](https://github.com/LilycleHeart/qqnt-liuli-theme) 1.3.5，保留原版配色、壁纸和布局设置，补充会话交互、聊天排版与滚动处理。当前版本 **1.3.5-local.35**；新增改动仍在实际使用中调整，未完成全面兼容性验证。
 
 > [!IMPORTANT]
 > **只支持 Windows 版 QQ 9.9.36**（LiteLoaderQQNT 1.4.1）。我们只在这个版本上开发和测试，其它版本（更旧的 9.9.21、9.9.28，或以后的新版）不保证兼容，可能出现输入框点不动、界面错位、启动报「文件已损坏」等问题。遇到问题请先把 QQ 更新 / 安装到 9.9.36 再试，详见 [支持的版本](#支持的版本)。
@@ -201,7 +201,6 @@ QQ 设置 → 左栏「**琉璃**」→ 拉到面板底部「**诊断**」小节
 ## 📋 待办
 
 - 亮色、暗色的颜色角色按 Material 3（Material Color Utilities）的标准配对，以「没有壁纸」为基准（亮色底纯白、暗色底纯黑）实测；壁纸太暗或太亮时请按滑条提示调高不透明度或遮罩
-- BetterQQNT 里「单条消息右键禁用 Markdown」未移植
 
 ---
 

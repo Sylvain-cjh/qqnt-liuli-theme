@@ -114,13 +114,15 @@ body .recent-contact-item:has(.no-disturb-icon) :is(.q-badge-dot, .q-badge-sub.q
   filter: none !important;
   opacity: .7 !important;
 }
-body .recent-contact-item:has(.no-disturb-icon) .q-badge-num:not(#ll) {
+body .recent-contact-item:has(.no-disturb-icon) .q-badge-num:not(#ll),
+body .recent-contact-item .q-badge-num.q-badge__grey:not(#ll) {
   background: color-mix(in srgb, var(--ll-on-glass) 12%, transparent) !important;
   color: var(--ll-on-glass-3) !important;
   box-shadow: none !important;
   text-shadow: none !important;
 }
-body .recent-contact-item:has(.no-disturb-icon) .q-badge-num:not(#ll) * {
+body .recent-contact-item:has(.no-disturb-icon) .q-badge-num:not(#ll) *,
+body .recent-contact-item .q-badge-num.q-badge__grey:not(#ll) * {
   background: transparent !important;
   color: inherit !important;
 }

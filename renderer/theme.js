@@ -116,6 +116,14 @@ async function extractSource() {
     if (img.decode) { await img.decode(); } else {
         await new Promise((res, rej) => { img.onload = res; img.onerror = rej; });
     }
+    /* #37：取色这一步本来就要把壁纸解码一遍，顺手把真实宽高比记进比例缓存。
+     * 启动流程是「await applyDynamicPalette() → renderWallpaper(...,"boot")」，
+     * 有了这一步，首帧渲染就能直接拿到比例，不会因为 ratioKnown:false 画成拉伸。 */
+    try {
+        if (img.naturalWidth > 0 && img.naturalHeight > 0) {
+            llImageRatioCache.set(src, img.naturalWidth / img.naturalHeight);
+        }
+    } catch (e) { /* 静默 */ }
     const size = 64;
     const canvas = document.createElement("canvas");
     canvas.width = size;
@@ -268,6 +276,8 @@ async function applyDynamicPalette() {
         else body.style.setProperty(k, vars[k]);
     }
     body.dataset.liuliSource = source;
+    // 对方的气泡选了彩色（实底）配色：气泡尾巴可以压进气泡 1px 盖住缝（bubbles.css，#16）
+    body.toggleAttribute("data-liuli-other-solid", vars["--ll-bubble-other"] != null);
     // 色板换了明暗，随模式变化的遮罩 / 阴影也要跟着重写（需求 A.2）
     llApplyModeSettings();
     console.log("[liuli-dsh-theme] wallpaper source = " + source + " (brand " + vars["--ll-brand"] + ")");
@@ -491,6 +501,48 @@ function saveSettings(cfg) {
     } catch (e) {}
 }
 
+/* ---------- 彻底重置：清 localStorage + 配置回默认 ----------
+ * 两处用到：1) 启动时发现数据目录被整个删了（主进程 resetPending 返回 wipe=true）；
+ *           2) 设置页「恢复全部默认」按钮。
+ * 只删 liuli- / liuli_ 开头的键（前缀匹配，不走硬编码列表，新加的键也能清掉），
+ * 再显式删一遍已知键兜底；绝不碰 QQ 自己的 localStorage。
+ * 返回是否成功（清 localStorage 或写配置任一失败即 false）。 */
+const LL_RESET_KNOWN_KEYS = [
+    "liuli-layout", "liuli-layout-seen", "liuli-dsh-mode", "liuli-dsh-wallpaper",
+    "liuli-dsh-wallpaper-rev", "liuli-dsh-main-viewport", "liuli-settings-tab",
+    "liuli-md-render", "liuli-font", "liuli-dsh-settings", "liuli-color-roles",
+    "liuli-wp-advice-dismissed"
+];
+
+async function llResetAll() {
+    let ok = true;
+    /* 1) localStorage：先按前缀扫一遍 */
+    try {
+        const keys = [];
+        for (let i = 0; i < localStorage.length; i++) {
+            const k = localStorage.key(i);
+            if (k && /^liuli[-_]/i.test(k)) keys.push(k);
+        }
+        for (const k of keys) localStorage.removeItem(k);
+    } catch (e) {
+        ok = false;
+        try { console.warn("[liuli-dsh-theme] reset localStorage failed:", e && e.message); } catch (err) {}
+    }
+    /* 2) 已知键再显式删一遍兜底。
+     * 用字面量而不是后面的 LL_* 常量：启动最早期调用时那些 const 还没初始化，引用会撞 TDZ。 */
+    for (const k of LL_RESET_KNOWN_KEYS) {
+        try { localStorage.removeItem(k); } catch (e) {}
+    }
+    /* 3) config.json 回到默认值（set 可能是异步的，失败不影响前面已清掉的结果） */
+    try {
+        await LiteLoader.api.config.set(SETTINGS_KEY, Object.assign({}, DEFAULT_SETTINGS));
+    } catch (e) {
+        ok = false;
+        try { console.warn("[liuli-dsh-theme] reset config failed:", e && e.message); } catch (err) {}
+    }
+    return ok;
+}
+
 /* 设置页窗口和主界面是两个独立 webContents，
  * 面板滑条改的只是设置页那一个窗口的 body 变量，主界面看不到。
  * 所以每次应用都把配置写进 localStorage，
@@ -587,12 +639,12 @@ function llRefreshVeilSegs(cfg) {
 
 const FIELDS = [
     { key: "blur", label: "材质模糊", min: 0, max: 40, step: 1, unit: "px", hint: "玻璃层的 backdrop-filter 半径" },
-    { key: "opacity", label: "不透明度", min: 0.1, max: 0.9, step: 0.01, unit: "", hint: "亚克力底的 alpha，越高越实。按最极端的纯黑 / 纯白壁纸估算：亮色主题不低于 0.6、推荐 0.8；暗色主题不低于 0.75、推荐 0.8。开了遮罩可以相应调低", pct: v => ((v - 0.1) / 0.8) * 100 },
+    { key: "opacity", label: "不透明度", min: 0.1, max: 0.9, step: 0.01, unit: "", hint: "玻璃底有多实。过低会影响可读性", pct: v => ((v - 0.1) / 0.8) * 100 },
     { key: "glow", label: "泛光强度", min: 0, max: 1, step: 0.01, unit: "", hint: "品牌色在边缘的发光量", pct: v => v * 100 },
     { key: "shadow", label: "阴影强度", min: 0, max: 1, step: 0.01, unit: "", hint: "玻璃卡片的投影浓度", pct: v => v * 100 },
     // 壁纸遮罩拆成亮色 / 暗色两条（需求 A.1），各自下面挂一个「遮罩颜色」分段按钮
-    { key: "dimLight", veilKey: "veilLight", label: "亮色主题遮罩", min: 0, max: DIM_MAX, step: 0.01, unit: "", hint: "只作用于亮色主题：盖在壁纸上的遮罩浓度，越高壁纸越淡、文字越好读。颜色选「亮」时和不透明度叠加，不透明度 0.5 时建议不低于 0.2、推荐 0.6；选「暗」会让亮色界面发灰，不推荐", pct: v => (v / DIM_MAX) * 100 },
-    { key: "dimDark", veilKey: "veilDark", label: "暗色主题遮罩", min: 0, max: DIM_MAX, step: 0.01, unit: "", hint: "只作用于暗色主题：盖在壁纸上的遮罩浓度，越高壁纸越淡、文字越好读。颜色选「暗」时和不透明度叠加，不透明度 0.5 时建议不低于 0.5、推荐 0.6；选「亮」会让暗色界面发灰，不推荐", pct: v => (v / DIM_MAX) * 100 }
+    { key: "dimLight", veilKey: "veilLight", label: "亮色主题遮罩", min: 0, max: DIM_MAX, step: 0.01, unit: "", hint: "亮色主题下盖在壁纸上的遮罩。过低会影响可读性", pct: v => (v / DIM_MAX) * 100 },
+    { key: "dimDark", veilKey: "veilDark", label: "暗色主题遮罩", min: 0, max: DIM_MAX, step: 0.01, unit: "", hint: "暗色主题下盖在壁纸上的遮罩。过低会影响可读性", pct: v => (v / DIM_MAX) * 100 }
 ];
 
 function toast(text) {
@@ -910,6 +962,11 @@ function llSyncPins(overlay) {
     if (!pins) return;
     var labels = applyBar();
     if (!labels.length && !document.querySelector(".chat-input-area .chat-func-bar")) return;
+    // 只放当前会话里 QQ 真的有的按钮（#20）：「我的手机」这类会话 QQ 原生工具栏没有「表情」「图片」，
+    // 以前照样摆出代理按钮，点了找不到原生按钮就什么都不做，看起来就是「按了没反应」。
+    if (document.querySelector(".chat-input-area .chat-func-bar .bar-icon")) {
+        labels = labels.filter(function (label) { return !!nativeBarItem(label); });
+    }
     var key = labels.join("\u0001");
     var complete = !pins.querySelector("[data-noicon]");
     if (pins.dataset.key === key && complete) return;
@@ -1202,7 +1259,36 @@ function llRecentSpeakers() {
     return out;
 }
 
-var llGM = { key: null, staff: {} };
+/* #32.1b：当前群的稳定标识，给「管理人数」缓存当桶名。
+ * 旧版直接取 `.chat-header .panel-header__title` 的整段文本，两个问题：
+ *   1) 取不到时 llNorm() 返回 ""，所有群共用 llGM.staff[""] 同一个桶 → 人数串号；
+ *   2) 标题里带着成员数「(260)」，有人进群 key 就变，缓存白丢。
+ * 现在优先用会话列表选中项的 data-contact-id（切群才变）；
+ * 但选中项可能比聊天标题晚一拍更新，名字对不上就不用，免得把人数写进别的群。
+ * 退一级用标题里的群名（.chat-header__contact-name，不含成员数）。
+ * 都取不到返回 ""——调用方据此跳过缓存（只按本次渲染结果展示）。 */
+function llGroupKey() {
+    var name = "";
+    try {
+        var h = document.querySelector(".chat-header .chat-header__contact-name");
+        name = llNorm((h && (h.getAttribute("aria-label") || h.textContent)) || "")
+            .replace(/\(\s*\d+\s*\)\s*$/, "");
+    } catch (e) { /* 静默 */ }
+    try {
+        var items = document.querySelectorAll(".recent-contact-item--selected[data-contact-id]");
+        for (var i = 0; i < items.length; i++) {
+            var el = items[i];
+            if (el.closest && el.closest(".viewport-list__measure")) continue;
+            var id = el.getAttribute("data-contact-id");
+            if (!id) continue;
+            if (name && llNorm(el.textContent).indexOf(name) < 0) continue;   // 名字对不上：多半还没切过去
+            return "c:" + id;
+        }
+    } catch (e) { /* 静默 */ }
+    return name ? "n:" + name : "";
+}
+
+var llGM = { key: null, staff: {} };   // staff: key -> { n: 人数, exact: 是否确定完整 }
 function llGroupMembersPass() {
     if (!isThemeActive()) return;
     try {
@@ -1211,13 +1297,37 @@ function llGroupMembersPass() {
         var rows = gm.querySelectorAll(".group-user");
         if (!rows.length) return;
 
-        // 换群 → 成员行入场
-        var title = document.querySelector(".chat-header .panel-header__title");
-        var key = llNorm(title && title.textContent);
+        // 换群 → 成员行入场。
+        // 标题先变，成员列表要等 QQ 拉完数据才换（2026-11-01 用户反馈：先给上一个群的成员播一遍入场动画，再突然刷新成新群）。
+        // 所以换群时先记下当前（旧）成员的签名，等签名变了、也就是新成员真的到了，再播动画；
+        // 1.5 秒内没变（两个群前几位成员恰好一样）就不播了，免得晚一拍突然动一下。
+        // #32.1b：换群判据换成稳定 key（会话 id / 群名）。以前用整段标题文本，
+        // 标题里带着成员数「(260)」——人数一变化就被误判成"换群"。
+        var key = llGroupKey();
+        var host = gm.querySelector(".group-member-list") || gm;
+        var sig = function () {
+            return Array.prototype.slice.call(host.querySelectorAll(".group-user__name"), 0, 6)
+                .map(function (n) { return n.textContent; }).join("|");
+        };
         if (key && key !== llGM.key) {
+            // 只有这次启动后第一次看到群成员栏才直接播；之后（包括中间切去私聊再回来）都等新成员到了再播
+            var first = !llGM.seen;
+            llGM.seen = true;
             llGM.key = key;
-            var host = gm.querySelector(".group-member-list") || gm;
-            requestAnimationFrame(function () { llRiseIn(llVisibleIn(host, ".group-user"), 16); });
+            if (first) {
+                requestAnimationFrame(function () { llRiseIn(llVisibleIn(host, ".group-user"), 16); });
+            } else {
+                llGM.pendingSig = sig();
+                llGM.pendingAt = Date.now();
+            }
+        } else if (llGM.pendingSig != null) {
+            var now = sig();
+            if (now !== llGM.pendingSig) {
+                llGM.pendingSig = null;
+                requestAnimationFrame(function () { llRiseIn(llVisibleIn(host, ".group-user"), 16); });
+            } else if (Date.now() - llGM.pendingAt > 1500) {
+                llGM.pendingSig = null;
+            }
         }
 
         // 管理团队：群主 + 管理员排在最前面且连续，画成一整块
@@ -1227,28 +1337,65 @@ function llGroupMembersPass() {
             if (!isNaN(i)) byIdx[i] = r;
         });
         var isStaff = function (r) { return !!(r && r.querySelector(".group-member-label")); };
-        Object.keys(byIdx).forEach(function (k) {
-            var i = Number(k), r = byIdx[i];
+        // #22：QQ 会把「Q群管家」这类机器人管理排在管理员中间，它没有管理员标签。
+        // 以前遇到它就当作管理团队结束：下面的管理员既不算进人数，也被画成另一块卡片。
+        // 现在夹在两个管理之间的非管理行（往后 3 行内还有管理）算进这一块，但不计人数。
+        var inBlock = {};
+        var blockEnd = -1;   // 管理团队之后第一个普通成员的 index；-1 表示还没渲染到
+        var started = !!byIdx[0];   // 第 0 行在不在：在才谈得上"从头数管理块"
+        var j = 0;
+        if (started) {
+            while (byIdx[j]) {
+                if (isStaff(byIdx[j])) { inBlock[j] = true; j++; continue; }
+                var more = false;
+                for (var k = 1; k <= 3 && byIdx[j + k]; k++) if (isStaff(byIdx[j + k])) { more = true; break; }
+                if (j > 0 && more) { inBlock[j] = true; j++; continue; }
+                break;
+            }
+            if (byIdx[j]) blockEnd = j;
+        }
+        // 第 0 行没渲染（列表滚下去了）时没法确定整块范围，退回只看自己有没有管理员标签
+        var staffAt = function (i) { return started ? !!inBlock[i] : isStaff(byIdx[i]); };
+        Object.keys(byIdx).forEach(function (key2) {
+            var i = Number(key2), r = byIdx[i];
             var g = "";
-            if (isStaff(r)) {
-                var prev = i > 0;
-                var next = byIdx[i + 1] ? isStaff(byIdx[i + 1]) : true;
+            if (staffAt(i)) {
+                var prev = i > 0 && (byIdx[i - 1] ? staffAt(i - 1) : true);
+                var next = byIdx[i + 1] ? staffAt(i + 1) : true;
                 g = !prev && !next ? "single" : !prev ? "first" : !next ? "last" : "mid";
             }
             if ((r.dataset.liuliStaff || "") !== g) {
                 if (g) r.dataset.liuliStaff = g; else delete r.dataset.liuliStaff;
             }
         });
-        // 管理人数：从第 0 行数到第一个非管理行（必须都渲染出来才算数），按群缓存
-        if (byIdx[0]) {
-            var n = 0;
-            while (byIdx[n] && isStaff(byIdx[n])) n++;
-            if (byIdx[n]) llGM.staff[key] = n;
+        /* 管理人数（#32.1b）：只数带管理员标签的行。
+         *  - blockEnd >= 0：管理块整块都渲染出来了 → 精确值，写缓存；
+         *  - 只渲染到块中间（大群分批/虚拟渲染）：这只能算「至少 N」，显示成 "N+"，
+         *    绝不写死成精确值——v1.3.2 对 #22 的修补就回归在这里：首屏只看到一个
+         *    管理员就把 1 缓存下来，之后很难再被覆盖，于是「22 人只显示 1 人」；
+         *  - 第 0 行都没渲染（列表滚下去了）→ 什么都别猜：有缓存用缓存，没有就空着。
+         * key 为空（拿不到会话 id / 群名）时既不读也不写缓存，避免所有群共用
+         * llGM.staff[""] 一个桶导致人数串号。 */
+        var exact = blockEnd >= 0;
+        var counted = 0;
+        for (var m = 0; m < (exact ? blockEnd : j); m++) if (byIdx[m] && isStaff(byIdx[m])) counted++;
+        var rec = key ? llGM.staff[key] : null;
+        if (key && started) {
+            if (exact) {
+                rec = { n: counted, exact: true };
+                llGM.staff[key] = rec;
+            } else if (counted > 0 && (!rec || (!rec.exact && counted > rec.n))) {
+                rec = { n: counted, exact: false };   // 只是"至少 N"，不能盖掉已知的精确值
+                llGM.staff[key] = rec;
+            }
         }
         var span = gm.querySelector(".group-member-title > span");
-        var cnt = llGM.staff[key];
+        var showN = 0, showExact = false;
+        if (started && exact) { showN = counted; showExact = true; }
+        else if (rec && rec.n > 0) { showN = rec.n; showExact = !!rec.exact; }
+        else if (started && counted > 0) { showN = counted; showExact = false; }
         if (span) {
-            var want = cnt ? String(cnt) : "";
+            var want = showN > 0 ? (showExact ? String(showN) : showN + "+") : "";
             if ((span.dataset.liuliStaff || "") !== want) {
                 if (want) span.dataset.liuliStaff = want; else delete span.dataset.liuliStaff;
             }
@@ -1510,13 +1657,48 @@ function installRevealTracker() {
     /* 按坐标判断，不依赖 mouseover/mouseout：
      * 那两个事件在 QQ 里会晚一拍到达，且离开时偶尔不来，标记就卡住不收。
      *   左边缘 ≤8px（整条）           → 展开导航；展开后指针在导航卡上就保持
-     *   顶边 ≤8px 的左 / 右 200px     → 唤出左上 / 右上胶囊；指针在胶囊上就保持
+     *   顶边 ≤ 胶囊底边（≈36px）左/右  → 唤出左上 / 右上胶囊；指针在胶囊上就保持
      * 离开后收起：导航 250ms；胶囊 600ms（#4 #10：给鼠标从感应条挪到按钮上留余量）。 */
-    var EDGE = 8, TOP = 24, PAD = 18, CORNER = 200;
+    var EDGE = 8, PAD = 18, CORNER = 200;
+    /* #32.4a：顶部唤出区不能只有窗口顶边 8px（--ll-dock-gap）。胶囊本体是
+     * top:6px + height:30px（assets/layout.css:459-462），按钮 34×26 的点击面从
+     * y≈8 才开始——只认 y≤8 时「光标已经在按钮上」反而唤不出来、点下去也没反应，
+     * 用户必须再往下摸一次才行。这里把顶部感应带放宽到胶囊底边（≈36px）；
+     * 左边缘（导航）仍只用 EDGE，不受影响。 */
+    var TOP_EDGE = 36, topEdgeCache = 0;
+    function topEdge() {
+        if (topEdgeCache) return topEdgeCache;
+        var v = TOP_EDGE;
+        try {
+            var el = document.querySelector(".topbar-profile") || document.querySelector(".window-control-area");
+            if (el) {
+                var t = parseFloat(getComputedStyle(el).top);
+                var hh = el.offsetHeight || 0;
+                if (isFinite(t) && hh > 0) v = Math.max(v, t + hh);      // top + height = 胶囊底边
+            }
+            var band = document.getElementById("liuli-top-hint-l");
+            if (band) {
+                var bh = band.getBoundingClientRect().height;
+                if (bh > 0) v = Math.max(v, bh);                          // CSS 若把感应条加高，跟着它走
+            }
+        } catch (e) { /* 静默 */ }
+        topEdgeCache = Math.max(EDGE, Math.min(64, v));   // 夹一层上限，CSS 改坏了也不至于整屏都算顶边
+        return topEdgeCache;
+    }
     var HOLD = { nav: 250, l: 600, r: 600 };
     var KEYS = { l: "liuliRL", r: "liuliRR", nav: "liuliRNav" };
     var state = {}, timers = {}, last = { x: -1, y: -1 };
+    /* 需求 B：导航栏切成「固定」（body[data-liuli-nav-pin]）后常驻显示，
+     * 不再跟鼠标展开 / 收起，也不释放焦点（releaseNavFocus 只在收起时调）。 */
+    function navPinned() { return document.body.dataset.liuliNavPin === "1"; }
+    function dropNav() {
+        if (timers.nav) { clearTimeout(timers.nav); timers.nav = 0; }
+        if (!state.nav && !document.body.dataset.liuliRNav) return;
+        state.nav = false;
+        delete document.body.dataset.liuliRNav;   // 固定时不该再有「展开」标记，否则 CSS 仍按展开态算
+    }
     function set(k, on, hold) {
+        if (k === "nav" && navPinned()) { dropNav(); return; }
         if (on) {
             if (timers[k]) { clearTimeout(timers[k]); timers[k] = 0; }
             if (!state[k]) { state[k] = true; document.body.dataset[KEYS[k]] = "1"; }
@@ -1550,8 +1732,10 @@ function installRevealTracker() {
         last.x = x; last.y = y;
         set("nav", x <= EDGE || (state.nav && over(".container-sidebar", x, y)));
         if (nativeBar()) { set("l", false); set("r", false); return; }
-        set("l", (y <= EDGE && x >= 56 && x <= CORNER + 56) || (state.l && over(".topbar-profile", x, y)));
-        set("r", (y <= TOP && x >= w - 176) || (state.r && over(".window-control-area", x, y)));
+        // #32.4a：顶部按胶囊底边算（≈36px），不再只认窗口顶边 8px
+        var top = topEdge();
+        set("l", (y <= top && x >= 56 && x <= CORNER + 56) || (state.l && over(".topbar-profile", x, y)));
+        set("r", (y <= top && x >= w - 176) || (state.r && over(".window-control-area", x, y)));
     }
     /* 鼠标进到拖动区 / 离开窗口时页面只收到一次 mouseleave，之后不再有 mousemove。
      * 如果离开前指针就在胶囊附近，多半只是经过了一小段拖动区，晚一点再收。 */
@@ -1578,7 +1762,8 @@ function installRevealTracker() {
  * ⚠️ QQ 顶部 40px 与左侧 52px 是窗口拖动区（-webkit-app-region: drag），
  * Windows 下鼠标在拖动区里不会把事件发给页面，:hover 永远不触发。
  * 所以入口必须是单独的 no-drag 元素，挂在 body 下（Vue 不会清掉）。
- *   #liuli-top-hint-l / -r：窗口顶边 8px 的感应条，指向时唤出左上/右上胶囊
+ *   #liuli-top-hint-l / -r：窗口顶边（#32.4a 后放宽到胶囊底边 ≈36px）的感应条，
+ *                          指向时唤出左上/右上胶囊
  *   #liuli-nav-handle    ：左边缘的小把手，指向时滑出导航栏 */
 function ensureHoverEntries() {
     try {
@@ -1592,12 +1777,18 @@ function ensureHoverEntries() {
             installDragHandle(drag, toast);
         }
         [["liuli-top-hint-l", "唤出个人信息"], ["liuli-top-hint-r", "唤出窗口按钮"]].forEach(function (pair) {
-            if (document.getElementById(pair[0])) return;
-            var el = document.createElement("div");
-            el.id = pair[0];
-            el.className = "liuli-top-hint";
-            el.title = pair[1];
-            document.body.appendChild(el);
+            var el = document.getElementById(pair[0]);
+            if (!el) {
+                el = document.createElement("div");
+                el.id = pair[0];
+                el.className = "liuli-top-hint";
+                el.title = pair[1];
+                document.body.appendChild(el);
+            }
+            /* #32.4a：感应条要覆盖胶囊高度（≈36px），所以它必须待在胶囊下面，
+             * 否则会挡住胶囊上按钮的真实点击面。胶囊是 z-index 3600，这里内联兜底
+             * 到 3500——CSS 那边不管怎么调高度都不会把按钮点没了。 */
+            if (el.style.zIndex !== "3500") el.style.zIndex = "3500";
         });
         if (!document.getElementById("liuli-nav-handle")) {
             var h = document.createElement("div");
@@ -1770,6 +1961,25 @@ function primeImageRatio(src) {
     });
 }
 
+/* #37：启动路径补算比例用。同一个 src 只解码一次（复用同一个 Promise，
+ * 失败结果也记住），避免 onerror 的坏图在「启动 → 600ms 兜底 → 轮询」之间
+ * 被反复重试，也避免并发调用各拿到一份不一致的结果。 */
+const llWpRatioTried = new Map();     // src -> Promise<ratio|null>（已发起/已完成的解码）
+const llWpRatioFailed = new Set();    // 解码失败（onerror）的 src：渲染时只能退回 cover
+function primeWallpaperRatioOnce(src) {
+    const known = getImageRatio(src);
+    if (known) return Promise.resolve(known);
+    const hit = llWpRatioTried.get(src);
+    if (hit) return hit;
+    if (llWpRatioTried.size > 8) { llWpRatioTried.clear(); llWpRatioFailed.clear(); }
+    const p = primeImageRatio(src).then(function (r) {
+        if (r) llWpRatioFailed.delete(src); else llWpRatioFailed.add(src);
+        return r;
+    });
+    llWpRatioTried.set(src, p);
+    return p;
+}
+
 /* ── 把选区按指定比例归一化：保留面积与中心，两维恒 ≤ 0.998 ── */
 function normalizeAreaToRatio(area, ratio) {
     const safeRatio = Math.max(0.05, Math.min(20, ratio));
@@ -1796,7 +2006,8 @@ function normalizeAreaToRatio(area, ratio) {
 }
 
 /* ── 由选区推导 background-size / position ──
- * cover 选区放大公式：size = 100%/w 100%/h；position = x/(1-w) y/(1-h) */
+ * cover 选区放大公式：size = 100%/w 100%/h；position = x/(1-w) y/(1-h)
+ * 返回 null 表示「这一帧算不出可信的几何」，调用方自己决定跳过还是退回 cover。 */
 function bgGeometry(area, imageRatio, viewportRatio) {
     if (arguments[3] === "contain") return { size: "contain", position: "center" };
     if (arguments[3] === "stretch") return { size: "100% 100%", position: "center" };
@@ -1804,8 +2015,12 @@ function bgGeometry(area, imageRatio, viewportRatio) {
         return { size: "cover", position: "center" };
     }
     const vRatio = viewportRatio && viewportRatio > 0 ? viewportRatio : window.innerWidth / window.innerHeight;
-    const iRatio = imageRatio && imageRatio > 0 ? imageRatio : vRatio;
-    const n = normalizeAreaToRatio(area, vRatio / iRatio);
+    /* #37：有选区、但图片比例还没解码出来时，**不能**拿视口比例顶替。
+     * 顶替后 vRatio / iRatio 恒为 1，normalizeAreaToRatio() 会把选区按 1:1 归一化成
+     * 正方形，算出来的 background-size 就是用户看到的「重启 QQ 后壁纸变拉伸」。
+     * 这里返回 null，让调用方等比例就绪后再画（宁可白一帧也不画错）。 */
+    if (!(imageRatio && imageRatio > 0)) return null;
+    const n = normalizeAreaToRatio(area, vRatio / imageRatio);
     if (n.w >= 0.999 || n.h >= 0.999) {
         return { size: "cover", position: "center" };
     }
@@ -1842,7 +2057,24 @@ function renderWallpaper(state, reason) {
         }
         return;
     }
-    const g = bgGeometry(state.area, getImageRatio(state.src), window.innerWidth / window.innerHeight, state.fit || "cover");
+    const ir = getImageRatio(state.src);
+    let g = bgGeometry(state.area, ir, window.innerWidth / window.innerHeight, state.fit || "cover");
+    if (!g) {
+        /* #37：有选区、比例未就绪（启动那一帧必然如此）。这一帧先不落笔，
+         * 由 primeWallpaperRatioOnce() 就绪后的那次渲染补上——宁可白一帧也不画成拉伸。
+         * 只有确定解码失败（onerror）的图才退回整块 cover：铺满、但不变形。 */
+        if (!llWpRatioFailed.has(state.src)) {
+            if (reason) {
+                auditWallpaper("apply", {
+                    scope: llScopeName(), styleLen: el.textContent.length, ratioKnown: false,
+                    fit: state.fit || "cover", area: state.area || null,
+                    skipped: "area-ratio-unknown", reason: reason, rev: llWallpaperRev()
+                });
+            }
+            return;
+        }
+        g = { size: "cover", position: "center" };
+    }
     el.textContent =
         // 伪元素的骨架也写在这里：以前只在默认壁纸 wallpaper.css 里，
         // 默认壁纸不再发布后，没有 content 的 ::before 不会画出来。
@@ -1881,11 +2113,21 @@ function llWallpaperPseudoApplied() {
 function scheduleWallpaperBootRetry() {
     setTimeout(function () {
         try {
-            if (llWallpaperPseudoApplied()) return;
             const st = loadWallpaperState();
             if (!st || !st.src) return;
-            console.warn("[liuli-dsh-theme] 壁纸已保存但 #app::before 没有背景图，重渲染一次");
+            const ir = getImageRatio(st.src);
+            /* #37：旧判据只看「#app::before 有没有 url(」。可启动时背景图早就画上去了
+             * （只是有选区、比例未知，background-size 算歪了），于是这里提前 return，
+             * 永远不会补救。有选区而比例仍未知，也必须重算一次。 */
+            const needRatio = !!(st.area && !ir);
+            if (llWallpaperPseudoApplied() && !needRatio) return;
+            console.warn("[liuli-dsh-theme] 壁纸启动渲染不完整（#37），重渲染一次");
             renderWallpaper(st, "boot-retry");
+            if (needRatio) {
+                primeWallpaperRatioOnce(st.src).then(function (r) {
+                    if (r) renderWallpaper(loadWallpaperState(), "ratio-primed");
+                });
+            }
             window.__liuliPaletteApplied = false;
             applyDynamicPalette();
         } catch (e) { /* 静默 */ }
@@ -2440,7 +2682,9 @@ function buildWallpaperControls(host) {
             stage.style.aspectRatio = String(wr);
             const fx = document.createElement("div");
             fx.className = "liuli-wp-effect";
-            const g = bgGeometry(st.area, ir, wr, fit);
+            // #37：比例还没就绪时 bgGeometry() 返回 null，预览这一帧先按 cover 画，
+            // 等 primeImageRatio() 回来重渲染，绝不能按 1:1 归一化（那就是拉伸预览）
+            const g = bgGeometry(st.area, ir, wr, fit) || { size: "cover", position: "center" };
             fx.style.backgroundImage = "url(\"" + st.src + "\")";
             fx.style.backgroundSize = g.size;
             fx.style.backgroundPosition = g.position;
@@ -2889,6 +3133,87 @@ function buildVeilRow(veilKey, settings) {
     return row;
 }
 
+/* ════════════════════════════════════════════════════════════
+ * 设置页顶部页签（需求 A）
+ * ------------------------------------------------------------
+ * 每个页签一个 div.liuli-tabpage，原有分组原样移进对应页；
+ * 不显示的页只加 hidden（display: none），**不销毁 DOM**，原因：
+ *   1. storage 同步按 document.querySelectorAll(".liuli-slider") 的下标取滑条，
+ *      数量必须恒等于 FIELDS.length；
+ *   2. 「遮罩颜色」分段按钮的刷新登记表 llVeilSegRefreshers 拿的是节点引用，
+ *      节点一旦被移出文档就再也刷不到。
+ * 选中的页签存 localStorage("liuli-settings-tab")，无效值回到第一页（外观）。
+ * ════════════════════════════════════════════════════════════ */
+const LL_TAB_KEY = "liuli-settings-tab";
+const LL_TABS = [
+    { key: "look", label: "外观" },
+    { key: "wallpaper", label: "壁纸" },
+    { key: "color", label: "配色" },
+    { key: "layout", label: "布局" },
+    { key: "text", label: "文字" },
+    { key: "diag", label: "诊断" }
+];
+
+/* 上次打开的页签；不认识的值回到第一页（外观） */
+function llSavedTab() {
+    try {
+        const v = localStorage.getItem(LL_TAB_KEY);
+        return LL_TABS.some(function (t) { return t.key === v; }) ? v : LL_TABS[0].key;
+    } catch (e) { return LL_TABS[0].key; }
+}
+
+/* 建页签栏 + 页容器，返回 { bar, pages, show }。
+ * 嵌入页（#liuli-embedded）和任何另一个宿主（浮动面板）都走这一个函数：
+ * container 是挂载点，groups 默认用 LL_TABS；pages 是 key → 容器，
+ * 调用方把原有分组 append 进去即可。 */
+function llBuildTabs(container, groups) {
+    const list = (Array.isArray(groups) && groups.length) ? groups : LL_TABS;
+    const bar = document.createElement("div");
+    bar.className = "liuli-seg liuli-tabs";       // 复用 .liuli-seg / .liuli-seg__item 的分段按钮样式
+    bar.setAttribute("role", "tablist");
+    bar.setAttribute("aria-label", "琉璃设置分区");
+    container.appendChild(bar);
+    const btns = {};
+    const pages = {};
+    function show(key) {
+        if (!pages[key]) key = list[0].key;
+        Object.keys(pages).forEach(function (k) {
+            const on = k === key;
+            pages[k].classList.toggle("is-active", on);
+            pages[k].hidden = !on;                 // 只隐藏，不销毁（见上面的原因）
+        });
+        Object.keys(btns).forEach(function (k) {
+            const on = k === key;
+            btns[k].classList.toggle("is-active", on);
+            btns[k].setAttribute("aria-selected", on ? "true" : "false");
+            btns[k].tabIndex = on ? 0 : -1;
+        });
+        try { localStorage.setItem(LL_TAB_KEY, key); } catch (e) {}
+    }
+    list.forEach(function (t) {
+        const b = document.createElement("button");
+        b.type = "button";
+        b.className = "liuli-seg__item";
+        b.textContent = t.label;
+        b.dataset.tab = t.key;
+        b.setAttribute("role", "tab");
+        b.addEventListener("click", function () { show(t.key); });
+        bar.appendChild(b);
+        btns[t.key] = b;
+    });
+    list.forEach(function (t) {
+        const p = document.createElement("div");
+        p.className = "liuli-tabpage";
+        p.dataset.tab = t.key;
+        p.setAttribute("role", "tabpanel");
+        p.hidden = true;
+        container.appendChild(p);
+        pages[t.key] = p;
+    });
+    show(llSavedTab());
+    return { bar: bar, pages: pages, show: show };
+}
+
 function buildPanelContent(host, settings) {
     host.innerHTML = "";
     llVeilSegRefreshers = [];
@@ -2903,6 +3228,15 @@ function buildPanelContent(host, settings) {
     sub.textContent = "材质与外观 · 实时生效";
     host.appendChild(sub);
 
+    /* 顶部页签（需求 A）：页签栏吸在设置区顶部，六个页各是一个 .liuli-tabpage 容器 */
+    const tabs = llBuildTabs(host, LL_TABS);
+    const pageLook = tabs.pages.look;
+    const pageWp = tabs.pages.wallpaper;
+    const pageColor = tabs.pages.color;
+    const pageLayout = tabs.pages.layout;
+    const pageText = tabs.pages.text;
+    const pageDiag = tabs.pages.diag;
+
     const info = document.createElement("div");
     info.className = "liuli-info";
     const swatch = document.createElement("div");
@@ -2910,10 +3244,14 @@ function buildPanelContent(host, settings) {
     const infoText = document.createElement("span");
     info.appendChild(swatch);
     info.appendChild(infoText);
-    host.appendChild(info);
-    buildModeControls(host);
-    buildMarkdownControls(host);
-    buildFontControls(host);
+    /* 取色信息条属于「配色」页：它显示的就是壁纸取色 → 品牌色这条链路的结果 */
+    pageColor.appendChild(info);
+    /* 「主题」分组：明暗模式（跟随 QQ / 亮色 / 暗色） */
+    const themeGroup = document.createElement("div");
+    themeGroup.className = "liuli-panel__group";
+    themeGroup.textContent = "主题";
+    pageLook.appendChild(themeGroup);
+    buildModeControls(pageLook);
     const refreshInfo = () => {
         const src = document.body.dataset.liuliSource || DEFAULT_SOURCE;
         const brand = getComputedStyle(document.body).getPropertyValue("--ll-brand").trim();
@@ -2930,7 +3268,7 @@ function buildPanelContent(host, settings) {
     const group = document.createElement("div");
     group.className = "liuli-panel__group";
     group.textContent = "材质";
-    host.appendChild(group);
+    pageLook.appendChild(group);
 
     const inputs = {};
     for (const f of FIELDS) {
@@ -2976,22 +3314,30 @@ function buildPanelContent(host, settings) {
         inputs[f.key] = slider;
         // 「壁纸遮罩」两条各自带一个「遮罩颜色：亮 | 暗」分段按钮
         if (f.veilKey) wrap.appendChild(buildVeilRow(f.veilKey, settings));
-        host.appendChild(wrap);
+        pageLook.appendChild(wrap);
     }
 
     // 两条遮罩共用的说明（需求 A.4 要求的提示文字）
     const veilNote = document.createElement("div");
     veilNote.className = "liuli-field__hint liuli-veil__note";
-    veilNote.textContent = "亮色、暗色主题各用各的遮罩：「亮」是盖一层白，「暗」是盖一层黑；遮罩越高壁纸越淡，文字越好读。";
-    host.appendChild(veilNote);
+    veilNote.textContent = "遮罩颜色：「亮」盖一层白，「暗」盖一层黑。";
+    pageLook.appendChild(veilNote);
 
-    buildRoleControls(host, function () { window.__liuliPaletteApplied = false; applyDynamicPalette(); });
-    buildWallpaperControls(host);
-    buildLayoutSection(host);
-    buildEffectSettings(host);
-    buildHotUpdateSettings(host);
-    buildDiagSection(host);   // 契约 3.5：诊断小节放在「恢复默认」之前
+    /* ── 其余各页：原有分组函数原样调用，只是容器从 host 换成对应页 ── */
+    buildRoleControls(pageColor, function () { window.__liuliPaletteApplied = false; applyDynamicPalette(); });
+    buildWallpaperControls(pageWp);      // 壁纸选择 / 裁剪适应 / 壁纸亮度提示
+    buildEffectSettings(pageLayout);
+    buildHotUpdateSettings(pageDiag);
+    buildLayoutSection(pageLayout);      // layout-custom.js 的全部分组
+    const textGroup = document.createElement("div");
+    textGroup.className = "liuli-panel__group";
+    textGroup.textContent = "文字";
+    pageText.appendChild(textGroup);
+    buildMarkdownControls(pageText);
+    buildFontControls(pageText);
+    buildDiagSection(pageDiag);   // 契约 3.5：诊断小节放在「恢复默认」之前
 
+    /* 「恢复默认」只把材质 / 遮罩打回默认值，放在外观页末尾 */
     const reset = document.createElement("div");
     reset.className = "liuli-field__hint";
     reset.style.cssText = "cursor:pointer;color:var(--ll-brand);margin-top:14px;";
@@ -3006,7 +3352,26 @@ function buildPanelContent(host, settings) {
         saveSettings(settings);
         toast("已恢复默认");
     });
-    host.appendChild(reset);
+    pageLook.appendChild(reset);
+
+    /* 「恢复全部默认」：连 localStorage 里的布局 / 明暗 / 壁纸 / 字体一起清，
+     * 和上面只打回材质 / 遮罩的「恢复默认」区分开。不自动 reload，只提示重启。 */
+    const resetAll = document.createElement("div");
+    resetAll.className = "liuli-field__hint";
+    resetAll.style.cssText = "cursor:pointer;color:var(--ll-brand);margin-top:8px;";
+    resetAll.textContent = "恢复全部默认";
+    resetAll.addEventListener("click", async () => {
+        if (!confirm("恢复全部默认设置？包括布局、明暗、壁纸、字体等，需要重启 QQ 生效。")) return;
+        const ok = await llResetAll();
+        Object.assign(settings, DEFAULT_SETTINGS);
+        for (const f of FIELDS) {
+            inputs[f.key].value = settings[f.key];
+            inputs[f.key].dispatchEvent(new Event("input"));
+        }
+        llRefreshVeilSegs(settings);   // 遮罩颜色也回到「亮 / 暗」
+        toast(ok ? "已恢复全部默认，重启 QQ 生效" : "恢复失败，详见 plugin.log");
+    });
+    pageLook.appendChild(resetAll);
 }
 
 let embeddedSettings = null;
@@ -3033,6 +3398,24 @@ async function initPanel() {
 }
 
 (async () => {
+    /* 数据目录被整个删掉时（主进程 resetPending 返回 wipe=true）：
+     * 先把 localStorage 里的 liuli 设置清干净、配置回默认，再走正常启动流程，
+     * 这样这次启动呈现的就是默认样子。任何失败都只 warn，绝不挡启动。 */
+    try {
+        const api = window.liuli_api;
+        if (api && typeof api.resetPending === "function") {
+            const pending = await api.resetPending();
+            if (pending && pending.wipe === true) {
+                const ok = await llResetAll();
+                /* 壁纸 revision 在模块顶部已经读过一次，先清掉这个内存值，免得被当成"没变化" */
+                try { llWpRevSeen = ""; } catch (e) {}
+                try { console.warn("[liuli-dsh-theme] data dir removed, local settings reset:", ok); } catch (e) {}
+            }
+        }
+    } catch (e) {
+        try { console.warn("[liuli-dsh-theme] reset check failed:", e && e.message); } catch (err) {}
+    }
+
     const started = Date.now();
     installRouteScope();
     try {
@@ -3055,8 +3438,17 @@ async function initPanel() {
         catch (e) { console.warn("[liuli-dsh-theme] dynamic palette failed:", e && e.message); }
 
         const bootWallpaper = loadWallpaperState();
+        /* #37：启动时图片比例必然还没解码（用户日志 ratioKnown:false）。有选区时同步落笔
+         * 会被 bgGeometry() 判成「算不出」而跳过；这里先发起解码，就绪后补一次渲染。
+         * 坏图由 primeWallpaperRatioOnce() 记住只试一次，不会反复重试。 */
+        if (bootWallpaper && bootWallpaper.src && bootWallpaper.area && !getImageRatio(bootWallpaper.src)) {
+            primeWallpaperRatioOnce(bootWallpaper.src).then(function (r) {
+                if (!r) return;
+                renderWallpaper(loadWallpaperState(), "ratio-primed");
+            });
+        }
         renderWallpaper(bootWallpaper, "boot");
-        // 启动兜底：有壁纸但 #app::before 没画出来时再渲染一次（契约第四节第 4 条）
+        // 启动兜底：有壁纸但 #app::before 没画出来 / 选区比例没就绪时再渲染一次（契约第四节第 4 条）
         if (bootWallpaper && bootWallpaper.src) scheduleWallpaperBootRetry();
         applyOverrides();
         fixContrast();
@@ -3503,7 +3895,11 @@ function suspendVisualWork() {
     }
     llResumeColors ||= llColorJobs.length > 0;
     llColorHandle = 0; llColorScheduled = false; llColorJobs.length = 0; llColorRoots = new WeakSet();
-    llImageRatioCache.clear(); llMotionPending.clear();
+    const wallpaperSrc = llWpLast?.src;
+    const wallpaperRatio = wallpaperSrc && getImageRatio(wallpaperSrc);
+    llImageRatioCache.clear();
+    if (wallpaperRatio) llImageRatioCache.set(wallpaperSrc, wallpaperRatio);
+    llMotionPending.clear();
     llMsgSeen.chat = null; llMsgSeen.max = null;
     llSel.obs?.disconnect(); llSel.obs = null; llSel.root = null; llSel.id = null;
     llGM.key = null; llGM.staff = {};
