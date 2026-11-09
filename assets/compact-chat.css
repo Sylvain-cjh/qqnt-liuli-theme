@@ -288,14 +288,6 @@ body[data-liuli-scope="main"] .recent-contact .recent-contact-item .item__conten
   padding-right: 10px !important;
 }
 /* QQ supplies --top on pinned conversations; no polling or extra markers. */
-body .recent-contact.liuli-contact-projection {
-  backdrop-filter: none !important;
-  -webkit-backdrop-filter: none !important;
-  box-shadow: none !important;
-}
-body .recent-contact .recent-contact-item:not(.recent-contact-item--selected):is(:hover, [data-liuli-projection]) {
-  background-image: none !important;
-}
 body[data-liuli-scope="main"] .recent-contact .recent-contact-item--top:not(.recent-contact-item--selected) {
   background: color-mix(in srgb, var(--ll-secondary-container, var(--ll-primary-container)) 32%, transparent) !important;
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ll-brand) 20%, transparent) !important;
@@ -359,6 +351,19 @@ body[data-liuli-scope="main"] .recent-contact .recent-contact-item .contact-name
   body[data-liuli-scope="main"] .recent-contact .recent-contact-item:hover .item__avatar {
     transform: none;
   }
+}
+/* Suppress the native hover sheen on conversation avatars. */
+body .recent-contact .recent-contact-item .item__avatar:hover,
+body .recent-contact .recent-contact-item .item__avatar:hover :is(.avatar, .q-avatar, img) {
+  filter: none !important;
+  box-shadow: none !important;
+}
+body .recent-contact .recent-contact-item .item__avatar:hover::before,
+body .recent-contact .recent-contact-item .item__avatar:hover::after,
+body .recent-contact .recent-contact-item .item__avatar:hover :is(.avatar, .q-avatar)::before,
+body .recent-contact .recent-contact-item .item__avatar:hover :is(.avatar, .q-avatar)::after {
+  background: transparent !important;
+  box-shadow: none !important;
 }
 /* Read-only hover preview. No copied media, blur animation or background loop. */
 .liuli-contact-preview {
