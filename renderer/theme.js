@@ -286,7 +286,7 @@ async function applyDynamicPalette() {
 /* ---------- 承载层：只这些允许挂玻璃 ---------- */
 const GLASS = [
     [".container-sidebar", "var(--ll-noise), rgba(var(--ll-acrylic), var(--ll-material-opacity))"],
-    [".recent-contact", "var(--ll-noise), rgba(var(--ll-acrylic), var(--ll-material-opacity))"],
+    [".recent-contact:not(.liuli-contact-projection)", "var(--ll-noise), rgba(var(--ll-acrylic), var(--ll-material-opacity))"],
     // .chat-header 不加材质（群聊标题栏保持通透）
     // .chat-input-area 也不加！它的 backdrop-filter 是内联写入的，
     // 会让内部的 .msg-input（ProseMirror 编辑器）完全不绘制 ——

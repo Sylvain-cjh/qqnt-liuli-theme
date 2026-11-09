@@ -288,6 +288,14 @@ body[data-liuli-scope="main"] .recent-contact .recent-contact-item .item__conten
   padding-right: 10px !important;
 }
 /* QQ supplies --top on pinned conversations; no polling or extra markers. */
+body .recent-contact.liuli-contact-projection {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  box-shadow: none !important;
+}
+body .recent-contact .recent-contact-item:not(.recent-contact-item--selected):is(:hover, [data-liuli-projection]) {
+  background-image: none !important;
+}
 body[data-liuli-scope="main"] .recent-contact .recent-contact-item--top:not(.recent-contact-item--selected) {
   background: color-mix(in srgb, var(--ll-secondary-container, var(--ll-primary-container)) 32%, transparent) !important;
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ll-brand) 20%, transparent) !important;
