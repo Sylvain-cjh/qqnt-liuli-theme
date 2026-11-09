@@ -7,10 +7,10 @@ export function installContactParallax() {
     const selector = '.recent-contact .recent-contact-item:not([data-liuli-projection])';
     const fine = matchMedia('(hover: hover) and (pointer: fine)');
     let options = loadEffects(), scale = options.scale, expansion = (scale - 1) / 2;
-    const layout = { styles: [] };
+    const layout = { styles: new Map() };
     const offsets = new Map();
     const spacing = new Map();
-    let layoutRoot = null;
+    let layoutRoot = null, layoutRows = null, geometryDirty = false, hoverAfter = 0;
     let lastFrame = 0;
     let active = null, frame = 0;
     hoveredRow = () => active?.row || null;
@@ -79,11 +79,13 @@ export function installContactParallax() {
     };
     function own(state, node, property, value) {
         if (!node) return;
-        let record = state.styles.find(r => r.node === node && r.property === property);
+        let fields = state.styles.get(node);
+        if (!fields) state.styles.set(node, fields = new Map());
+        let record = fields.get(property);
         if (!record) {
             record = { node, property, value: node.style.getPropertyValue(property),
                 priority: node.style.getPropertyPriority(property), written: '' };
-            state.styles.push(record);
+            fields.set(property, record);
         }
         if (record.input === value) return;
         record.input = value;
@@ -92,14 +94,17 @@ export function installContactParallax() {
         // value during cleanup, rather than the unnormalized input string.
         record.written = node.style.getPropertyValue(property);
     }
-    function releaseStyles(state) {
-        for (const r of state.styles) {
+    function releaseFields(fields) {
+        for (const r of fields.values()) {
             if (r.node.style.getPropertyValue(r.property) !== r.written) continue;
             if (r.value) r.node.style.setProperty(r.property, r.value, r.priority);
             else r.node.style.removeProperty(r.property);
         }
+    }
+    function releaseStyles(state) {
+        for (const fields of state.styles.values()) releaseFields(fields);
         state.row?.removeAttribute('data-liuli-depth');
-        state.styles = [];
+        state.styles.clear();
     }
     function restore(state) {
         // Returning states are advanced by the shared frame loop.
@@ -137,7 +142,7 @@ export function installContactParallax() {
         const transform = row.style.getPropertyValue('transform') || 'none';
         const state = { row, bounds, base: transform === 'none' ? 'none' : transform,
             progress: 0, eased: 0, goal: 1, rx: 0, ry: 0, renderTop: bounds.top, pinUntil: 0,
-            styles: [], x: 0, y: 0, contactId: row.getAttribute('data-contact-id'),
+            styles: new Map(), x: 0, y: 0, contactId: row.getAttribute('data-contact-id'),
             selected: row.classList.contains('recent-contact-item--selected'),
             pinned: row.classList.contains('recent-contact-item--top'),
             selectionOrigin: row.parentElement.querySelector('.recent-contact-item--selected')?.getBoundingClientRect() };
@@ -164,6 +169,15 @@ export function installContactParallax() {
     function draw(now) {
         frame = 0;
         if (!isThemeActive()) { clearForScroll(); return; }
+        if (geometryDirty) {
+            geometryDirty = false;
+            const positions = [...cards.values()].filter(retainRow).map(state => ({ state, rect: state.row.getBoundingClientRect() }));
+            for (const { state, rect } of positions) {
+                rect.y -= offsets.get(state.row) || 0;
+                state.bounds = rect;
+                state.overlay.style.left = `${rect.left}px`;
+            }
+        }
         for (const state of dirtyCards) {
             if (state.phase === 'disposed') continue;
             if (!retainRow(state)) { restore(state); if (active === state) active = null; }
@@ -190,8 +204,9 @@ export function installContactParallax() {
         if (!root) {
             releaseStyles(layout); offsets.clear(); spacing.clear(); return;
         }
+        if (layoutRoot !== root) layoutRows = null;
         layoutRoot = root;
-        const rows = [...root.querySelectorAll(selector)].filter(row => !row.closest('.viewport-list__measure'));
+        const rows = layoutRows ||= [...root.querySelectorAll(selector)].filter(row => !row.closest('.viewport-list__measure'));
         for (const row of rows) {
             let above = 0, below = 0;
             for (const state of live) {
@@ -223,10 +238,11 @@ export function installContactParallax() {
             state.overlay.style.transform = 'translateY(' + shift + 'px) perspective(900px) rotateX(' + state.rx + 'deg) rotateY(' + state.ry + 'deg) scale(' + actualScale / scale + ')';
         }
         if (moving) frame = requestAnimationFrame(draw);
-        else if (!live.length) { releaseStyles(layout); offsets.clear(); spacing.clear(); layoutRoot = null; }
+        else if (!live.length) { releaseStyles(layout); offsets.clear(); spacing.clear(); layoutRoot = layoutRows = null; }
     }
     function move(event) {
         if (!options.enabled || !isThemeActive()) return;
+        if (performance.now() < hoverAfter) return;
         if (!observedList?.isConnected) observeList();
         if (event.buttons && active) return;
         if (event.pointerType === 'touch' || !fine.matches || event.buttons ||
@@ -279,7 +295,8 @@ export function installContactParallax() {
         reset(true);
         for (const state of [...returning.keys()]) restore(state);
         cancelAnimationFrame(frame); frame = 0;
-        releaseStyles(layout); offsets.clear(); spacing.clear(); layoutRoot = null;
+        releaseStyles(layout); offsets.clear(); spacing.clear(); layoutRoot = layoutRows = null;
+        geometryDirty = false;
         dirtyCards.clear();
     }
     // Clear before wheel scrolling changes native virtual-list geometry. Scroll
@@ -340,29 +357,20 @@ export function installContactParallax() {
         }
         if (dirtyCards.size || [...cards.values()].some(state => !state.row.isConnected)) wake();
         const structural = records.some(record => record.type === 'childList' &&
-            record.target instanceof Element && record.target.matches('.viewport-list__inner') &&
+            record.target instanceof Element && (record.target === layoutRoot || record.target.matches('.viewport-list__inner')) &&
             record.target.closest('.recent-contact:not(.liuli-contact-projection)'));
         const selection = records.some(record => record.type === 'attributes' &&
             record.target.matches('.recent-contact-item:not([data-liuli-projection])') &&
             record.target.classList.contains('recent-contact-item--selected'));
         if (!structural && !selection) return;
         if (structural) {
-            layout.styles = layout.styles.filter(record => {
-                if (record.node.isConnected) return true;
-                if (record.node.style.getPropertyValue(record.property) === record.written) {
-                    if (record.value) record.node.style.setProperty(record.property, record.value, record.priority);
-                    else record.node.style.removeProperty(record.property);
-                }
-                return false;
-            });
-            for (const row of offsets.keys()) if (!row.isConnected) { offsets.delete(row); spacing.delete(row); }
-            const positions = [...cards.values()].filter(retainRow).map(state => ({ state, rect: state.row.getBoundingClientRect() }));
-            for (const { state, rect } of positions) {
-                rect.y -= offsets.get(state.row) || 0;
-                state.bounds = rect;
-                state.overlay.style.left = `${rect.left}px`;
+            layoutRows = null;
+            for (const [node, fields] of layout.styles) if (!node.isConnected) {
+                releaseFields(fields);
+                layout.styles.delete(node);
             }
-            wake();
+            for (const row of offsets.keys()) if (!row.isConnected) { offsets.delete(row); spacing.delete(row); }
+            if (cards.size) { geometryDirty = true; wake(); }
         }
         if (!reorderFrame) reorderFrame = requestAnimationFrame(sampleSelected);
     });
@@ -388,6 +396,7 @@ export function installContactParallax() {
         cancelAnimationFrame(reorderFrame); reorderFrame = 0;
         reorderAnimation?.cancel(); reorderAnimation = null; selectedSnapshot = null;
         if (enabled) {
+            hoverAfter = performance.now() + 120;
             observeList();
             rootObserver.observe(document.body, { childList: true, subtree: true });
             if (fastResumeEnabled()) afterThemePaint('contact-selection', sampleSelected); else sampleSelected();
@@ -395,7 +404,8 @@ export function installContactParallax() {
     });
     listen(document, 'scroll', event => {
         if (!isListScroll(event)) return;
-        scrollAt = performance.now(); reorderAnimation?.cancel(); reorderAnimation = null;
+        scrollAt = performance.now(); hoverAfter = scrollAt + 100;
+        reorderAnimation?.cancel(); reorderAnimation = null;
         if (!reorderFrame) reorderFrame = requestAnimationFrame(sampleSelected);
     }, { capture: true, passive: true });
     function dispose() {

@@ -978,9 +978,9 @@ function moveSenderIntoBubble(root = document) {
  * 发送者身份用「名字文本」判定（名字被搬进气泡后仍然可读），
  * 取不到名字时退回头像 src。
  */
-function groupMessages() {
+function groupMessages(root = document) {
     try {
-        var list = document.querySelectorAll(".message-container");
+        var list = root.querySelectorAll(".message-container");
         if (list.length === 0) return;
 
         // ⚠️ 不能用整个 .user-name 的文本：指针悬停时 QQ 会往里插 .send-time 时间戳，
@@ -1039,6 +1039,7 @@ function stickAvatars() {
         for (var i = 0; i < list.length; i++) {
             var mc = list[i];
             var g = mc.dataset.liuliG;
+            if (g === "mid" && groupTop !== null) continue;
             // 用 wrapper 而不是 .msg-content-container：转发记录等卡片没有后者，
             // 而 wrapper 在普通消息里与气泡同框。
             var bubble = mc.querySelector(":scope > .message-content__wrapper") || mc.querySelector(".msg-content-container");
@@ -1403,24 +1404,28 @@ function installMessageObserver() {
             full = false;
         }
         const scrolling = performance.now() - (window.__llScrollT || 0) < 120;
-        const items = [...dirty].filter(x => x.isConnected && area.contains(x));
-        for (const item of [...dirty]) if (!item.isConnected || !area.contains(item)) dirty.delete(item);
+        const processedItems = [];
+        const limited = scrolling || resuming;
         obs.disconnect();
         try {
-            if (full) { liuliMessagePass(); llMarkdownPass(area); llAtPass(area); dirty.clear(); }
+            if (full) {
+                for (const item of dirty) if (item.isConnected && area.contains(item)) processedItems.push(item);
+                liuliMessagePass(); llMarkdownPass(area); llAtPass(area); dirty.clear();
+            }
             else {
                 const started = performance.now();
-                let processed = 0;
-                for (const item of items) {
+                for (const item of dirty) {
+                    dirty.delete(item);
+                    if (!item.isConnected || !area.contains(item)) continue;
                     moveSenderIntoBubble(item); markQuoteRoots(item); llMarkdownPass(item); llAtPass(item);
-                    dirty.delete(item); processed++;
-                    if ((resuming || (scrolling && processed >= 6)) && performance.now() - started > 3) break;
+                    if (!resuming) processedItems.push(item);
+                    if (limited && performance.now() - started >= 3) break;
                 }
-                if (!resuming || !dirty.size) { groupMessages(); scheduleStick(); }
+                if (!dirty.size) { groupMessages(area); scheduleStick(); }
             }
             // Messages received while hidden are already present on return;
             // establish their baseline without replaying entry animations.
-            if (!resuming) llMotionPass(items);
+            if (!resuming) llMotionPass(processedItems);
             else if (!dirty.size) { llMsgSeen.chat = null; llMotionPass([]); resuming = false; }
             full = false;
         } finally {
@@ -1435,6 +1440,11 @@ function installMessageObserver() {
             const target = rec.target.nodeType === 1 ? rec.target : rec.target.parentElement;
             if (target?.closest('.liuli-contact-projection, #liuli-embedded, .liuli-panel, .recent-contact, .group-member, .container-sidebar')) continue;
             const area = target?.closest('.chat-msg-area');
+            if (area && target.closest('.send-time')) continue;
+            if (area && rec.type === 'childList') {
+                const nodes = [...rec.addedNodes, ...rec.removedNodes];
+                if (nodes.length && nodes.every(node => node.nodeType === 1 && node.matches('.send-time'))) continue;
+            }
             if (hidden) {
                 if (area || [...rec.addedNodes, ...rec.removedNodes].some(node =>
                     node.nodeType === 1 && (node.matches('.chat-msg-area') || node.querySelector('.chat-msg-area')))) {
