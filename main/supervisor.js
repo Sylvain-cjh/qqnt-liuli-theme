@@ -23,7 +23,9 @@ function windows() {
         try {
             if (window.isDestroyed() || window.webContents.isDestroyed()) return false;
             const url = new URL(window.webContents.getURL());
-            return ['file:', 'local:', 'app:'].includes(url.protocol) && /(?:^|\/)index\.html$/i.test(url.pathname);
+            return ['file:', 'local:', 'app:'].includes(url.protocol) &&
+                /(?:^|\/)index\.html$/i.test(url.pathname) &&
+                !!url.hash && !/^#\/(?:blank|image-viewer)(?:[/?#]|$)/i.test(url.hash);
         }
         catch { return false; }
     });
