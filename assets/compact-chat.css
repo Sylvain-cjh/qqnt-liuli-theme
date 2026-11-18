@@ -365,6 +365,26 @@ body .recent-contact .recent-contact-item .item__avatar:hover :is(.avatar, .q-av
   background: transparent !important;
   box-shadow: none !important;
 }
+.liuli-cursor-ripple {
+  position: fixed;
+  display: block;
+  width: 22px;
+  height: 22px;
+  box-sizing: border-box;
+  border: 1.5px solid var(--ll-brand);
+  border-radius: 50%;
+  translate: -50% -50%;
+  pointer-events: none;
+  z-index: 2147483100;
+  animation: liuli-cursor-ripple-out var(--ll-dur-fast, 140ms) var(--ll-ease, ease-out) both;
+}
+@keyframes liuli-cursor-ripple-out {
+  from { transform: scale(.45); opacity: .8; }
+  to { transform: scale(1); opacity: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .liuli-cursor-ripple { display: none; }
+}
 /* Read-only hover preview. No copied media, blur animation or background loop. */
 .liuli-contact-preview {
   position: fixed;
