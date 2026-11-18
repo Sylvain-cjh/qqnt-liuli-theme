@@ -14,6 +14,48 @@ export function installInputCaret() {
         editor = caret = blink = lastRect = null;
     }
 
+    function caretRect(range, activeEditor) {
+        const rect = range.getBoundingClientRect();
+        if (rect.height) return rect;
+
+        // The editor can put the selection on a paragraph node before its
+        // placeholder BR, where a collapsed range has no text box.
+        const anchor = range.startContainer;
+        let line = (anchor.nodeType === Node.ELEMENT_NODE ? anchor : anchor.parentElement)
+            ?.closest('p, div');
+        if (!line || !activeEditor.contains(line)) line = activeEditor;
+        if (line === activeEditor && anchor === activeEditor) {
+            const child = anchor.childNodes[range.startOffset] || anchor.lastChild;
+            if (child?.nodeType === Node.ELEMENT_NODE && child.matches('p, div')) line = child;
+        }
+        if (line.textContent.replace(/[\u200B\uFEFF]/g, '').length ||
+            line.querySelector('img, video, canvas, [contenteditable="false"]')) return null;
+
+        const placeholder = line.querySelector('br');
+        const breakRect = placeholder?.getBoundingClientRect();
+        if (breakRect?.height) return breakRect;
+
+        // A totally empty editor may have no BR yet. Use its first line box
+        // without inserting a node into the editable document.
+        const box = line.getBoundingClientRect();
+        const style = getComputedStyle(line);
+        const px = value => parseFloat(value) || 0;
+        const fontSize = px(style.fontSize);
+        if (!box.width || !fontSize) return null;
+        const lineHeight = px(style.lineHeight) || fontSize * 1.2;
+        const leftEdge = box.left + px(style.borderLeftWidth) + px(style.paddingLeft);
+        const rightEdge = box.right - px(style.borderRightWidth) - px(style.paddingRight);
+        const indent = px(style.textIndent);
+        const rtl = style.direction === 'rtl';
+        const alignment = style.textAlign;
+        const left = alignment === 'center' ? (leftEdge + rightEdge) / 2 :
+            (alignment === 'right' || (alignment === 'end' && !rtl) || (alignment === 'start' && rtl))
+                ? rightEdge - indent : leftEdge + indent;
+        const height = Math.min(lineHeight, fontSize * 1.2);
+        const top = box.top + px(style.borderTopWidth) + px(style.paddingTop) + (lineHeight - height) / 2;
+        return { left, top, height, bottom: top + height };
+    }
+
     function update() {
         frame = 0;
         if (!enabled || !isThemeActive() || reducedMotion.matches || composing || !document.hasFocus()) {
@@ -26,9 +68,9 @@ export function installInputCaret() {
             hide();
             return;
         }
-        const rect = selection.getRangeAt(0).getBoundingClientRect();
+        const rect = caretRect(selection.getRangeAt(0), activeEditor);
         const bounds = activeEditor.getBoundingClientRect();
-        if (!rect.height || rect.left < bounds.left - 1 || rect.left > bounds.right + 1 ||
+        if (!rect || rect.left < bounds.left - 1 || rect.left > bounds.right + 1 ||
             rect.top < Math.max(0, bounds.top) - 1 || rect.bottom > Math.min(innerHeight, bounds.bottom) + 1) {
             hide();
             return;
