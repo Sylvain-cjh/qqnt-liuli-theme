@@ -365,7 +365,8 @@ body .recent-contact .recent-contact-item .item__avatar:hover :is(.avatar, .q-av
   background: transparent !important;
   box-shadow: none !important;
 }
-.chat-input-area [contenteditable="true"][data-liuli-animated-caret] {
+.chat-input-area [contenteditable="true"][data-liuli-animated-caret],
+.chat-input-area [contenteditable="true"][data-liuli-animated-caret] * {
   caret-color: transparent !important;
 }
 .liuli-input-caret {
@@ -373,6 +374,10 @@ body .recent-contact .recent-contact-item .item__avatar:hover :is(.avatar, .q-av
   inset: 0 auto auto 0;
   display: block;
   width: 2px;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: 0 !important;
+  box-sizing: border-box !important;
   border-radius: 1px;
   background: var(--ll-brand, currentColor);
   pointer-events: none;
@@ -381,7 +386,8 @@ body .recent-contact .recent-contact-item .item__avatar:hover :is(.avatar, .q-av
 }
 @media (prefers-reduced-motion: reduce) {
   .liuli-input-caret { display: none; }
-  .chat-input-area [contenteditable="true"][data-liuli-animated-caret] { caret-color: auto !important; }
+  .chat-input-area [contenteditable="true"][data-liuli-animated-caret],
+  .chat-input-area [contenteditable="true"][data-liuli-animated-caret] * { caret-color: auto !important; }
 }
 /* Read-only hover preview. No copied media, blur animation or background loop. */
 .liuli-contact-preview {

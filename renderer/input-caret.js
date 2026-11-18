@@ -5,7 +5,7 @@ export function installInputCaret() {
     const selector = '.chat-input-area [contenteditable="true"]';
     const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
     let enabled = loadEffects().animatedCaret;
-    let editor, caret, blink, lastRect, composing, frame = 0;
+    let editor, caret, blink, lastRect, composing, frame = 0, settleFrame = 0;
 
     function hide() {
         editor?.removeAttribute('data-liuli-animated-caret');
@@ -15,6 +15,18 @@ export function installInputCaret() {
     }
 
     function caretRect(range, activeEditor) {
+        // Use the editor's own position mapping after its document transaction.
+        // During IME composition the DOM selection is newer than editor state.
+        const view = activeEditor.pmViewDesc?.view;
+        if (!composing && view && !view.isDestroyed && view.state?.selection.empty) {
+            try {
+                const mapped = view.coordsAtPos(view.state.selection.head);
+                if (mapped.bottom > mapped.top) {
+                    return { left: mapped.left, top: mapped.top,
+                        height: mapped.bottom - mapped.top, bottom: mapped.bottom };
+                }
+            } catch {}
+        }
         const rect = range.getBoundingClientRect();
         if (rect.height) return rect;
 
@@ -58,7 +70,7 @@ export function installInputCaret() {
 
     function update() {
         frame = 0;
-        if (!enabled || !isThemeActive() || reducedMotion.matches || composing || !document.hasFocus()) {
+        if (!enabled || !isThemeActive() || reducedMotion.matches || !document.hasFocus()) {
             hide();
             return;
         }
@@ -84,7 +96,9 @@ export function installInputCaret() {
             document.body.append(caret);
             editor.setAttribute('data-liuli-animated-caret', '');
         }
-        const nearby = lastRect && Math.abs(rect.left - lastRect.left) <= 36 && Math.abs(rect.top - lastRect.top) <= 4;
+        const moved = !lastRect || Math.abs(rect.left - lastRect.left) > .25 ||
+            Math.abs(rect.top - lastRect.top) > .25 || Math.abs(rect.height - lastRect.height) > .25;
+        const nearby = !composing && lastRect && Math.abs(rect.left - lastRect.left) <= 36 && Math.abs(rect.top - lastRect.top) <= 4;
         caret.style.transitionDuration = nearby ? '' : '0ms';
         caret.style.transform = 'translate(' + rect.left + 'px, ' + rect.top + 'px)';
         caret.style.height = rect.height + 'px';
@@ -96,7 +110,9 @@ export function installInputCaret() {
                 { opacity: .12, offset: .76 },
                 { opacity: 1, offset: 1 }
             ], { duration: 1000, iterations: Infinity, easing: 'ease-in-out' });
-        } else blink.currentTime = 0;
+        } else if (moved) blink.currentTime = 0;
+        if (composing) { blink.pause(); blink.currentTime = 0; }
+        else if (blink.playState === 'paused') blink.play();
     }
 
     function schedule() {
@@ -107,6 +123,7 @@ export function installInputCaret() {
         if (enabled && isThemeActive() && !reducedMotion.matches) schedule();
         else {
             cancelAnimationFrame(frame);
+            cancelAnimationFrame(settleFrame); settleFrame = 0;
             frame = 0;
             composing = null;
             hide();
@@ -115,7 +132,7 @@ export function installInputCaret() {
 
     const controller = new AbortController();
     const options = { signal: controller.signal };
-    for (const type of ['selectionchange', 'input', 'focusin']) document.addEventListener(type, schedule, options);
+    for (const type of ['selectionchange', 'input', 'focusin', 'compositionupdate']) document.addEventListener(type, schedule, options);
     document.addEventListener('focusout', event => {
         if (composing === event.target) composing = null;
         if (editor === event.target) hide();
@@ -124,9 +141,20 @@ export function installInputCaret() {
     document.addEventListener('compositionstart', event => {
         if (!event.target.closest?.(selector)) return;
         composing = event.target;
-        hide();
+        lastRect = null;
+        schedule();
     }, options);
-    document.addEventListener('compositionend', () => { composing = null; schedule(); }, options);
+    document.addEventListener('compositionend', event => {
+        if (!event.target.closest?.(selector)) return;
+        composing = null;
+        lastRect = null;
+        schedule();
+        // QQ may commit the editor selection in the following rendering frame.
+        cancelAnimationFrame(settleFrame);
+        settleFrame = requestAnimationFrame(() => {
+            settleFrame = requestAnimationFrame(() => { settleFrame = 0; schedule(); });
+        });
+    }, options);
     document.addEventListener('scroll', () => { if (editor) schedule(); }, { ...options, capture: true, passive: true });
     window.addEventListener('resize', schedule, options);
     window.addEventListener('focus', schedule, options);
