@@ -5,13 +5,15 @@ export function installInputCaret() {
     const selector = '.chat-input-area [contenteditable="true"]';
     const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
     let enabled = loadEffects().animatedCaret;
-    let editor, caret, blink, lastRect, composing, frame = 0, settleFrame = 0;
+    let editor, caret, blink, movement, lastRect, composing, frame = 0, settleFrame = 0;
+    let movementEasing = 'ease-out';
 
     function hide() {
         editor?.removeAttribute('data-liuli-animated-caret');
         caret?.remove();
         blink?.cancel();
-        editor = caret = blink = lastRect = null;
+        movement?.cancel();
+        editor = caret = blink = movement = lastRect = null;
     }
 
     function caretRect(range, activeEditor) {
@@ -94,13 +96,28 @@ export function installInputCaret() {
             caret.className = 'liuli-input-caret';
             caret.setAttribute('aria-hidden', 'true');
             document.body.append(caret);
+            movementEasing = getComputedStyle(caret).getPropertyValue('--ll-ease').trim() || 'ease-out';
             editor.setAttribute('data-liuli-animated-caret', '');
         }
         const moved = !lastRect || Math.abs(rect.left - lastRect.left) > .25 ||
             Math.abs(rect.top - lastRect.top) > .25 || Math.abs(rect.height - lastRect.height) > .25;
-        const nearby = !composing && lastRect && Math.abs(rect.left - lastRect.left) <= 36 && Math.abs(rect.top - lastRect.top) <= 4;
-        caret.style.transitionDuration = nearby ? '' : '0ms';
-        caret.style.transform = 'translate(' + rect.left + 'px, ' + rect.top + 'px)';
+        const nearby = lastRect && Math.abs(rect.left - lastRect.left) <= 96 &&
+            Math.abs(rect.top - lastRect.top) <= 4;
+        if (moved) {
+            // Continue from the displayed position when another keystroke
+            // interrupts the previous movement.
+            const from = nearby ? getComputedStyle(caret).transform : null;
+            movement?.cancel();
+            movement = null;
+            const transform = 'translate(' + rect.left + 'px, ' + rect.top + 'px)';
+            caret.style.transform = transform;
+            if (nearby && from && from !== 'none') {
+                movement = caret.animate([{ transform: from }, { transform }],
+                    { duration: 100, easing: movementEasing });
+                const current = movement;
+                current.onfinish = () => { if (movement === current) movement = null; };
+            }
+        }
         caret.style.height = rect.height + 'px';
         lastRect = rect;
         if (!blink) {
@@ -141,13 +158,11 @@ export function installInputCaret() {
     document.addEventListener('compositionstart', event => {
         if (!event.target.closest?.(selector)) return;
         composing = event.target;
-        lastRect = null;
         schedule();
     }, options);
     document.addEventListener('compositionend', event => {
         if (!event.target.closest?.(selector)) return;
         composing = null;
-        lastRect = null;
         schedule();
         // QQ may commit the editor selection in the following rendering frame.
         cancelAnimationFrame(settleFrame);

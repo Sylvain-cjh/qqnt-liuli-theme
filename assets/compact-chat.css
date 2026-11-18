@@ -382,7 +382,7 @@ body .recent-contact .recent-contact-item .item__avatar:hover :is(.avatar, .q-av
   background: var(--ll-brand, currentColor);
   pointer-events: none;
   z-index: 2147483100;
-  transition: transform var(--ll-dur-fast, 140ms) var(--ll-ease, ease-out);
+  transition: none !important;
 }
 @media (prefers-reduced-motion: reduce) {
   .liuli-input-caret { display: none; }
