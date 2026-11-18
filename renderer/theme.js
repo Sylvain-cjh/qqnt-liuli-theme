@@ -9,7 +9,7 @@ import { installLayout, applyBar, nativeBarItem, applyAll as llLayoutPass, build
 import { installArkExternal } from "./ark-external.js";
 import { installContactParallax } from "./contact-parallax.js";
 import { installContactPreview } from "./contact-preview.js";
-import { installCursorRipple } from "./cursor-ripple.js";
+import { installInputCaret } from "./input-caret.js";
 import { installDragHandle } from "./window-drag.js";
 import { buildEffectSettings } from "./effect-settings.js";
 import { installThemeUpdates, buildHotUpdateSettings } from "./hot-update.js";
@@ -3464,7 +3464,7 @@ async function initPanel() {
         installSideListObserver();
         installContactParallax();
         installContactPreview();
-        installCursorRipple();
+        installInputCaret();
         llWatchContactList();
         liuliMessagePass();
         try { await initPanel(); } catch (e) { console.warn("[liuli-dsh-theme] panel failed:", e && e.message); }
@@ -3837,7 +3837,7 @@ function installMaintenanceScheduler() {
             if (target?.closest('.chat-msg-area, #liuli-embedded, .liuli-panel, .liuli-contact-projection, .liuli-contact-preview')) continue;
             // Side-list observers own these updates; do not run whole-page work.
             if (target?.closest('.recent-contact, .group-member')) continue;
-            if ([...record.addedNodes, ...record.removedNodes].length && [...record.addedNodes, ...record.removedNodes].every(n => n.nodeType === 1 && n.matches('.liuli-contact-projection, .liuli-contact-preview, .liuli-cursor-ripple'))) continue;
+            if ([...record.addedNodes, ...record.removedNodes].length && [...record.addedNodes, ...record.removedNodes].every(n => n.nodeType === 1 && n.matches('.liuli-contact-projection, .liuli-contact-preview, .liuli-input-caret'))) continue;
             if (!isThemeActive()) { dirty = true; observer.disconnect(); return; }
             changed = true;
             for (const node of record.addedNodes) if (node.nodeType === 1 && !colorRoots.has(document.body)) {

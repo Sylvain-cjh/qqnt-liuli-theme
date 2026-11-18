@@ -1,13 +1,13 @@
 const KEY = 'liuli-conversation-effects';
 const EVENT = 'liuli-conversation-effects-changed';
 export const EFFECT_DEFAULTS = Object.freeze({ enabled: true, scale: 1.25, tilt: 1,
-    enterMs: 420, exitMs: 340, holdMs: 140, spacing: true, shareSpace: true, jelly: .55, preview: false, previewDelay: 650, cursorRipple: false });
+    enterMs: 420, exitMs: 340, holdMs: 140, spacing: true, shareSpace: true, jelly: .55, preview: false, previewDelay: 650, animatedCaret: false });
 const limits = { scale: [1, 1.4], tilt: [0, 1.5], enterMs: [120, 700], exitMs: [120, 650], holdMs: [0, 300], jelly: [0, 1], previewDelay: [400, 1600] };
 export function loadEffects() {
     let raw = {};
     try { raw = JSON.parse(localStorage.getItem(KEY) || '{}') || {}; } catch {}
     const result = { ...EFFECT_DEFAULTS };
-    for (const key of ['enabled', 'spacing', 'shareSpace', 'preview', 'cursorRipple']) if (typeof raw[key] === 'boolean') result[key] = raw[key];
+    for (const key of ['enabled', 'spacing', 'shareSpace', 'preview', 'animatedCaret']) if (typeof raw[key] === 'boolean') result[key] = raw[key];
     for (const [key, [min, max]] of Object.entries(limits)) {
         if (typeof raw[key] === 'number' && Number.isFinite(raw[key])) result[key] = Math.max(min, Math.min(max, raw[key]));
     }
@@ -28,7 +28,7 @@ export function buildEffectSettings(host) {
     const hint = document.createElement('div'); hint.className = 'liuli-field__hint';
     hint.textContent = '保存后同步到已打开的窗口；关闭会话效果不影响消息动画。'; block.append(hint);
     const controls = [];
-    for (const [key, label] of [['enabled','会话 3D 效果'],['spacing','放大时让位'],['shareSpace','相邻会话复用空间'],['preview','会话悬停预览'],['cursorRipple','鼠标点击涟漪']]) {
+    for (const [key, label] of [['enabled','会话 3D 效果'],['spacing','放大时让位'],['shareSpace','相邻会话复用空间'],['preview','会话悬停预览'],['animatedCaret','输入光标动画']]) {
         const row = document.createElement('div'); row.className = 'liuli-wp-fit liuli-mode-row';
         const text = document.createElement('span'); text.textContent = label; row.append(text);
         const group = document.createElement('div'); group.className = 'liuli-seg'; row.append(group);
